@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mélodie Magique</title>
+<style>
+  html,body{margin:0;height:100%;background:#150f2a;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, CX = 400, CY = 330;
+const PADS = [  // 0 haut, 1 droite, 2 bas, 3 gauche
+  { key: "ArrowUp", col: "#ff4d5e", dim: "#7a1f2a", note: 72, ang: -Math.PI / 2, label: "↑" },
+  { key: "ArrowRight", col: "#4aa3ff", dim: "#1f3f7a", note: 76, ang: 0, label: "→" },
+  { key: "ArrowDown", col: "#4af07a", dim: "#1f7a3a", note: 79, ang: Math.PI / 2, label: "↓" },
+  { key: "ArrowLeft", col: "#ffd23f", dim: "#7a621f", note: 84, ang: Math.PI, label: "←" },
+];
+let hero = heroIndexFromUrl(), state = "title", time = 0, seq = [], idx = 0, phase = "show", showI = 0, showT = 0, lit = -1, litT = 0, lives = 3, score = 0, best = 0, msg = "", msgT = 0, overT = 0, wait = 0;
+try { best = +localStorage.getItem("simon-best") || 0; } catch (e) {}
+
+function newGame() { seq = []; lives = 3; score = 0; state = "play"; nextRound(); }
+function nextRound() { seq.push(Math.floor(Math.random() * 4)); phase = "show"; showI = 0; showT = .9; idx = 0; lit = -1; }
+function press(i) { lit = i; litT = .3; Music.note(PADS[i].note, .35, "triangle"); }
+function guess(i) {
+  press(i);
+  if (seq[idx] === i) {
+    idx++;
+    if (idx >= seq.length) { score += 10 * seq.length; msg = "Bravo ! 🎵"; msgT = 1; phase = "wait"; wait = 1; Music.sfx("match"); if (seq.length >= 10) { state = "win"; overT = .8; Music.sfx("win"); if (score > best) { best = score; try { localStorage.setItem("simon-best", best); } catch (e) {} } } }
+  } else {
+    lives--; Music.sfx("nope"); msg = "Oups !"; msgT = 1;
+    if (lives <= 0) { state = "over"; overT = .8; Music.sfx("lose"); if (score > best) { best = score; try { localStorage.setItem("simon-best", best); } catch (e) {} } }
+    else { phase = "wait"; wait = 1.2; idx = 0; replay = true; }
+  }
+}
+let replay = false;
+function update(dt) {
+  time += dt; overT -= dt; msgT -= dt; litT -= dt; if (litT <= 0) lit = -1;
+  if (state !== "play" || Kit.paused) return;
+  if (phase === "show") {
+    showT -= dt;
+    if (showT <= 0) {
+      if (showI >= seq.length) { phase = "input"; idx = 0; msg = "À toi !"; msgT = 1; }
+      else { press(seq[showI]); litT = Math.max(.25, .5 - seq.length * .015); showI++; showT = Math.max(.35, .75 - seq.length * .02); }
+    }
+  } else if (phase === "wait") { wait -= dt; if (wait <= 0) { if (replay) { replay = false; phase = "show"; showI = 0; showT = .8; lit = -1; } else nextRound(); } }
+}
+
+function draw() {
+  const g = ctx.createRadialGradient(CX, CY, 50, CX, CY, 500); g.addColorStop(0, "#2a1a5a"); g.addColorStop(1, "#0d0820"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  if (state === "title") {
+    Kit.text(ctx, "MÉLODIE MAGIQUE", W / 2, 120, 52, "#ffd23f");
+    Kit.text(ctx, "Écoute la mélodie, puis rejoue-la avec les flèches !", W / 2, 170, 22);
+    Kit.text(ctx, "↑ → ↓ ← : les 4 notes   •   chaque tour, la mélodie s'allonge   •   M : musique", W / 2, 215, 15, "#cfe");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 300, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 380); ctx.scale(2.8, 2.8); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 6), time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 500, 26); if (best) Kit.text(ctx, "Record : " + best, W / 2, 545, 18, "#bde");
+    return;
+  }
+  PADS.forEach((p, i) => {
+    const on = lit === i; ctx.save(); ctx.translate(CX, CY); ctx.rotate(p.ang); ctx.translate(120, 0); ctx.rotate(-p.ang);
+    ctx.fillStyle = on ? p.col : p.dim; if (on) { ctx.shadowColor = p.col; ctx.shadowBlur = 40; }
+    ctx.beginPath(); ctx.roundRect(-85, -70, 170, 140, 28); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.fillStyle = on ? "#fff" : "rgba(255,255,255,.3)"; ctx.font = "bold 44px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(p.label, 0, 0); ctx.textBaseline = "alphabetic"; ctx.restore();
+  });
+  ctx.fillStyle = "#1a1038"; ctx.beginPath(); ctx.arc(CX, CY, 70, 0, 7); ctx.fill(); ctx.strokeStyle = HEROES[hero].ship.color; ctx.lineWidth = 5; ctx.stroke();
+  ctx.save(); ctx.translate(CX, CY); ctx.scale(2.4, 2.4); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 4), time); ctx.restore();
+  Kit.text(ctx, "Score " + score, 14, 34, 24, "#ffd23f", "left"); Kit.text(ctx, "Niveau " + seq.length + "/10", W / 2, 34, 22);
+  Kit.text(ctx, "♥".repeat(Math.max(0, lives)), W - 14, 34, 26, "#ff5a6e", "right");
+  Kit.text(ctx, phase === "input" ? "À toi de jouer ! (" + idx + "/" + seq.length + ")" : phase === "show" ? "Écoute…" : "", W / 2, 70, 22, "#fff");
+  if (msgT > 0) Kit.text(ctx, msg, W / 2, 545, 34, "#6ee06e");
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "MAÎTRE DE LA MUSIQUE !", W / 2, 240, 46, "#ffd23f"); Kit.text(ctx, "10 niveaux, 10 notes retenues ! Score : " + score, W / 2, 300, 24); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "FIN DE LA MÉLODIE", W / 2, 240, 50, "#ff5a6e"); Kit.text(ctx, "Tu as retenu " + (seq.length - 1) + " notes ! Score : " + score, W / 2, 300, 24);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 340, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "memory", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => false,
+  keydown(e) {
+    if (state === "title" || ((state === "over" || state === "win") && overT <= 0)) { if (e.code === "Space") newGame(); return; }
+    if (state === "play" && phase === "input") { const i = PADS.findIndex(p => p.key === e.code); if (i >= 0) guess(i); }
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

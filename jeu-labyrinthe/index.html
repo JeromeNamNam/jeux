@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Labyrinthe du Trésor</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0907;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, T = 40;
+const dk = document.createElement("canvas"); dk.width = W; dk.height = H; const dctx = dk.getContext("2d");
+
+/* ---------------- Audio ---------------- */
+const Snd = (() => {
+  let ac = null, master, next = 0, step = 0, muted = false, noiseBuf;
+  const BPM = 104, SD = 60 / BPM / 4;
+  const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+  const bars = [
+    [[76,4],[72,2],[74,2],[76,8]],
+    [[77,4],[72,4],[69,4],[72,4]],
+    [[72,4],[76,4],[79,4],[76,4]],
+    [[80,4],[76,4],[71,4],[76,4]],
+    [[81,6],[79,2],[76,4],[72,4]],
+    [[77,4],[74,4],[69,4],[74,4]],
+    [[76,4],[80,4],[83,4],[80,4]],
+    [[81,8]],
+  ];
+  const mel = new Array(128).fill(null);
+  bars.forEach((b, i) => { let s = i * 16; b.forEach(([n, l]) => { mel[s] = [n, l]; s += l; }); });
+  const roots  = [45,41,48,40,45,38,40,45];
+  const chords = [[57,60,64],[53,57,60],[55,60,64],[56,59,64],[57,60,64],[57,62,65],[56,59,64],[57,60,64]];
+  const arp = [0,1,2,1];
+
+  function tone(type, f, t, dur, vol, filt) {
+    const o = ac.createOscillator(), g = ac.createGain(); let out = g;
+    o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g);
+    if (filt) { const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = filt; g.connect(lp); out = lp; }
+    out.connect(master); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function noise(t, dur, vol, hp, type) {
+    const s = ac.createBufferSource(), g = ac.createGain(), f = ac.createBiquadFilter();
+    s.buffer = noiseBuf; f.type = type || "highpass"; f.frequency.value = hp;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + dur + 0.02);
+  }
+  function drum(t, f0, vol) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f0 * .3, t + 0.15);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.25);
+  }
+  function playStep(s, t) {
+    const bar = s >> 4, i = s & 15, m = mel[s];
+    if (m) tone("triangle", mtof(m[0]), t, m[1] * SD * 1.1, 0.12);
+    if (m) tone("square", mtof(m[0]), t, m[1] * SD * 0.7, 0.018, 1800);
+    if (i === 0 || i === 8) tone("triangle", mtof(roots[bar]), t, SD * 7.5, 0.3);
+    if (i % 2 === 0) tone("sine", mtof(chords[bar][arp[(i >> 1) & 3]] + 12), t, SD * 2, 0.07);
+    if (i === 0) drum(t, 110, 0.3);
+    if (i === 8) drum(t, 90, 0.22);
+    if (i === 12) noise(t, 0.1, 0.05, 3000);
+    if (i % 4 === 2) noise(t, 0.025, 0.02, 8000);
+  }
+  function schedule() { while (next < ac.currentTime + 0.2) { playStep(step, next); next += SD; step = (step + 1) % 128; } }
+  return {
+    init() {
+      if (ac) { if (ac.state === "suspended") ac.resume(); return; }
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      master = ac.createGain(); master.gain.value = muted ? 0 : 0.5; master.connect(ac.destination);
+      noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      next = ac.currentTime + 0.1; setInterval(schedule, 25);
+    },
+    toggleMute() { muted = !muted; if (master) master.gain.value = muted ? 0 : 0.5; },
+    get muted() { return muted; },
+    sfx(k) {
+      if (!ac) return; const t = ac.currentTime;
+      if (k === "coin") { tone("square", mtof(88), t, 0.06, 0.06); tone("square", mtof(95), t + 0.06, 0.14, 0.06); }
+      else if (k === "key") { [79, 84, 88, 91].forEach((n, j) => tone("square", mtof(n), t + j * 0.07, 0.15, 0.07)); }
+      else if (k === "heart") { [72, 79, 84].forEach((n, j) => tone("triangle", mtof(n), t + j * 0.08, 0.2, 0.15)); }
+      else if (k === "flash") { noise(t, 0.5, 0.18, 1500); tone("sawtooth", mtof(96), t, 0.4, 0.05, 4000); }
+      else if (k === "hurt") { const o = ac.createOscillator(), g = ac.createGain(); o.type = "sawtooth";
+        o.frequency.setValueAtTime(350, t); o.frequency.exponentialRampToValueAtTime(60, t + 0.5);
+        g.gain.setValueAtTime(0.15, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+        o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.55); noise(t, 0.25, 0.15, 500, "lowpass"); }
+      else if (k === "star") { [72, 79, 84, 91, 96].forEach((n, j) => tone("triangle", mtof(n), t + j * 0.05, 0.2, 0.14)); }
+      else if (k === "locked") { tone("square", 150, t, 0.12, 0.08); tone("square", 120, t + 0.12, 0.2, 0.08); }
+      else if (k === "win") { [72, 76, 79, 84, 79, 84, 88].forEach((n, j) => tone("square", mtof(n), t + j * 0.1, 0.25, 0.07)); }
+    }
+  };
+})();
+
+/* ---------------- Personnages ---------------- */
+
+/* ---------------- Labyrinthe ---------------- */
+const TOTAL = 15;
+const sizeFor = n => [Math.min(41, 19 + (n - 1) * 2), Math.min(31, 15 + (n - 1) * 2)];
+const rnd = n => Math.floor(Math.random() * n);
+let mw, mh, map, seen, dist, pdist, pcell;
+let P, stars = [], keysItems = [], coins = [], hearts = [], chest, monsters = [], parts = [], need = 0, got = 0;
+let state = "title", hero = heroIndexFromUrl(), level = 1, lives = 3, score = 0, time = 0, levelTime = 0, banner = 0, msg = "", msgT = 0;
+let flashT = 0, flashCd = 0, shake = 0, cam = { x: 0, y: 0 }, best = 0, overT = 0, paused = false;
+try { best = +localStorage.getItem("labyrinthe-best") || 0; } catch (e) {}
+const keys = {};
+
+const wall = (x, y) => x < 0 || y < 0 || x >= mw || y >= mh || map[y * mw + x] === 1;
+function genMaze(w, h) {
+  mw = w; mh = h; map = new Uint8Array(w * h).fill(1);
+  const st = [[1, 1]]; map[w + 1] = 0;
+  while (st.length) {
+    const [x, y] = st[st.length - 1], opts = [[2, 0], [-2, 0], [0, 2], [0, -2]].filter(([dx, dy]) => {
+      const nx = x + dx, ny = y + dy; return nx > 0 && ny > 0 && nx < w - 1 && ny < h - 1 && map[ny * w + nx] === 1; });
+    if (!opts.length) { st.pop(); continue; }
+    const [dx, dy] = opts[rnd(opts.length)]; map[(y + dy / 2) * w + x + dx / 2] = 0; map[(y + dy) * w + x + dx] = 0; st.push([x + dx, y + dy]);
+  }
+  for (let k = 0, n = Math.floor(w * h * .03); k < n * 4 && n > 0; k++) {   // quelques raccourcis (boucles)
+    const x = 1 + rnd(w - 2), y = 1 + rnd(h - 2);
+    if (map[y * w + x] === 1 && ((!wall(x - 1, y) && !wall(x + 1, y)) || (!wall(x, y - 1) && !wall(x, y + 1)))) { map[y * w + x] = 0; if (--n <= 0) break; }
+  }
+}
+function bfs(sx, sy) {
+  const d = new Int16Array(mw * mh).fill(-1), q = [sy * mw + sx]; d[q[0]] = 0;
+  for (let i = 0; i < q.length; i++) {
+    const c = q[i], x = c % mw, y = (c / mw) | 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy; if (wall(nx, ny)) continue;
+      const n = ny * mw + nx; if (d[n] < 0) { d[n] = d[c] + 1; q.push(n); }
+    }
+  }
+  return d;
+}
+const cellC = c => ({ x: (c % mw) * T + T / 2, y: ((c / mw) | 0) * T + T / 2 });
+
+function startLevel(n) {
+  level = n; const [w, h] = sizeFor(n); genMaze(w, h);
+  seen = new Uint8Array(w * h); dist = bfs(1, 1); parts = []; levelTime = 0; flashT = 0; flashCd = 0;
+  const floors = []; for (let i = 0; i < w * h; i++) if (dist[i] > 0) floors.push(i);
+  const far = [...floors].sort((a, b) => dist[b] - dist[a]);
+  chest = cellC(far[0]);
+  need = 2 * n; got = 0; keysItems = []; coins = []; hearts = [];
+  const pick = (minD, taken) => { for (let i = 0; i < 1000; i++) { const c = floors[rnd(floors.length)];
+    if (dist[c] >= minD - Math.floor(i / 50) && !taken.includes(c)) return c; } return floors[0]; };
+  const taken = [far[0]];
+  for (let k = 0; k < need; k++) { const c = pick(Math.min(10 + k, 22), taken); taken.push(c); keysItems.push({ ...cellC(c), got: false }); }
+  { const c = pick(8, taken); taken.push(c); hearts.push({ ...cellC(c), got: false }); }
+  stars = [];
+  for (let k = 0; k < 2 + Math.floor(n / 4); k++) { const c = pick(6, taken); taken.push(c); stars.push({ ...cellC(c), got: false }); }
+  for (const c of floors) if (!taken.includes(c) && Math.random() < .09) coins.push({ ...cellC(c), got: false });
+  P = { x: 1.5 * T, y: 1.5 * T, r: 11, dir: { x: 0, y: 1 }, inv: 0, step: 0, power: 0 };
+  monsters = [];
+  for (let k = 0; k < 1 + Math.ceil(n / 2); k++) { const c = pick(14, []), p = cellC(c);
+    monsters.push({ x: p.x, y: p.y, tx: p.x, ty: p.y, stun: 0, speed: 42 + n * 3 + rnd(8), hue: [200, 290, 120][rnd(3)], dx: 0, dy: 0 }); }
+  pcell = -1; state = "play"; banner = 2; msg = ""; setCam(true);
+}
+function newGame() { lives = 5; score = 0; startLevel(1); }
+
+/* ---------------- Mise à jour ---------------- */
+function moveAxis(ax, d) {
+  if (ax === "x") P.x += d; else P.y += d;
+  const c0 = Math.floor((P.x - P.r) / T), c1 = Math.floor((P.x + P.r) / T), r0 = Math.floor((P.y - P.r) / T), r1 = Math.floor((P.y + P.r) / T);
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (wall(c, r)) {
+    if (ax === "x") P.x = d > 0 ? c * T - P.r - .01 : (c + 1) * T + P.r + .01; else P.y = d > 0 ? r * T - P.r - .01 : (r + 1) * T + P.r + .01;
+    return;
+  }
+}
+function setCam(snap) {
+  const tx = mw * T <= W ? (mw * T - W) / 2 : Math.max(0, Math.min(P.x - W / 2, mw * T - W));
+  const ty = mh * T <= H ? (mh * T - H) / 2 : Math.max(0, Math.min(P.y - H / 2, mh * T - H));
+  if (snap) { cam.x = tx; cam.y = ty; } else { cam.x += (tx - cam.x) * .12; cam.y += (ty - cam.y) * .12; }
+}
+const lightR = () => 240 + (flashT > 0 ? 200 * (flashT / .6) : 0);
+function burst(x, y, c, n) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.3, s = 30 + Math.random() * 140; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .4 + Math.random() * .4, c }); } }
+function hurt() {
+  if (P.inv > 0) return;
+  lives--; shake = .4; Snd.sfx("hurt"); burst(P.x, P.y, "#ff5a5a", 20);
+  if (lives <= 0) { state = "over"; overT = .8; if (score > best) { best = score; try { localStorage.setItem("labyrinthe-best", best); } catch (e) {} } return; }
+  P.x = 1.5 * T; P.y = 1.5 * T; P.inv = 3.5; monsters.forEach(m => m.stun = Math.max(m.stun, 2.5));
+}
+function update(dt) {
+  time += dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  shake = Math.max(0, shake - dt);
+  if (state === "over") overT -= dt;
+  if (state === "clear") { banner -= dt; if (banner <= 0) { if (level >= TOTAL) { state = "win"; if (score > best) { best = score; try { localStorage.setItem("labyrinthe-best", best); } catch (e) {} } } else startLevel(level + 1); } return; }
+  if (state !== "play" || paused) return;
+  levelTime += dt; if (banner > 0) banner -= dt; if (msgT > 0) msgT -= dt;
+  if (P.inv > 0) P.inv -= dt; if (P.power > 0) P.power -= dt; flashT = Math.max(0, flashT - dt); flashCd = Math.max(0, flashCd - dt);
+
+  const dx = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0), dy = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
+  if (dx || dy) { const l = Math.hypot(dx, dy), sp = (P.power > 0 ? 210 : 170) * dt / l; P.dir = { x: dx, y: dy }; if (dx) moveAxis("x", dx * sp); if (dy) moveAxis("y", dy * sp); P.step += dt * 10; }
+  const cx = Math.floor(P.x / T), cy = Math.floor(P.y / T);
+  if (cy * mw + cx !== pcell) { pcell = cy * mw + cx; pdist = bfs(cx, cy); }
+  const R = lightR() * .95, r2 = Math.ceil(R / T) + 1;
+  for (let y = cy - r2; y <= cy + r2; y++) for (let x = cx - r2; x <= cx + r2; x++) if (x >= 0 && y >= 0 && x < mw && y < mh && Math.hypot(x * T + T / 2 - P.x, y * T + T / 2 - P.y) < R) seen[y * mw + x] = 1;
+
+  for (const k of keysItems) if (!k.got && Math.hypot(k.x - P.x, k.y - P.y) < 22) { k.got = true; got++; score += 50; Snd.sfx("key"); burst(k.x, k.y, "#ffd23f", 16); msg = got >= need ? "Toutes les clés ! Va au coffre !" : "Clé " + got + "/" + need; msgT = 2; }
+  for (const s of stars) if (!s.got && Math.hypot(s.x - P.x, s.y - P.y) < 22) { s.got = true; P.power = 8; score += 25; Snd.sfx("star"); burst(s.x, s.y, "#7df0ff", 22); msg = "⭐ Pouvoir ! Traverse les fantômes !"; msgT = 2; }
+  for (const c of coins) if (!c.got && Math.hypot(c.x - P.x, c.y - P.y) < 18) { c.got = true; score += 10; Snd.sfx("coin"); burst(c.x, c.y, "#ffd23f", 6); }
+  for (const h of hearts) if (!h.got && Math.hypot(h.x - P.x, h.y - P.y) < 20) { h.got = true; lives = Math.min(7, lives + 1); Snd.sfx("heart"); burst(h.x, h.y, "#ff5a7a", 14); }
+  if (Math.hypot(chest.x - P.x, chest.y - P.y) < 26) {
+    if (got >= need) { const bonus = 100 * level + Math.max(0, Math.round(300 - levelTime)); score += bonus; state = "clear"; banner = 2.6; msg = "Bonus : " + bonus; Snd.sfx("win"); burst(chest.x, chest.y, "#ffd23f", 40); }
+    else if (msgT <= 0) { msg = "Le coffre est verrouillé : il manque " + (need - got) + " clé(s)"; msgT = 2; Snd.sfx("locked"); }
+  }
+
+  for (const m of monsters) {
+    if (m.stun > 0) { m.stun -= dt; continue; }    let rem = m.speed * dt;
+    while (rem > 0) {
+      const ddx = m.tx - m.x, ddy = m.ty - m.y, d = Math.hypot(ddx, ddy);
+      if (d > 0.5) { const s = Math.min(rem, d); m.x += ddx / d * s; m.y += ddy / d * s; rem -= s; continue; }
+      m.x = m.tx; m.y = m.ty;
+      const mx = Math.floor(m.x / T), my = Math.floor(m.y / T), mc = my * mw + mx;
+      const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([a, b]) => !wall(mx + a, my + b));
+      let pick;
+      if (pdist && pdist[mc] >= 0 && pdist[mc] <= 6) pick = nb.reduce((best, [a, b]) => pdist[(my + b) * mw + mx + a] < pdist[(my + best[1]) * mw + mx + best[0]] ? [a, b] : best, nb[0]);
+      else { const fwd = nb.filter(([a, b]) => !(a === -m.dx && b === -m.dy)); const o = fwd.length ? fwd : nb; pick = o[rnd(o.length)]; }
+      m.dx = pick[0]; m.dy = pick[1]; m.tx = (mx + pick[0]) * T + T / 2; m.ty = (my + pick[1]) * T + T / 2;
+    }
+    if (Math.hypot(m.x - P.x, m.y - P.y) < 22 && P.power <= 0) hurt();
+  }
+  setCam(false);
+}
+
+/* ---------------- Rendu ---------------- */
+function text(t, x, y, size, color, align) {
+  ctx.font = `bold ${size}px "Trebuchet MS",Verdana,sans-serif`; ctx.textAlign = align || "center";
+  ctx.lineWidth = 5; ctx.strokeStyle = "rgba(0,0,0,.75)"; ctx.lineJoin = "round"; ctx.strokeText(t, x, y); ctx.fillStyle = color || "#fff"; ctx.fillText(t, x, y);
+}
+function drawHero(idx, x, y, dir, step, scale) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(scale || 1, scale || 1); heroTop(ctx, HEROES[idx], dir, Math.sin(step) * 1.5, time); ctx.restore();
+}
+function drawMonster(m) {
+  const x = m.x - cam.x, y = m.y - cam.y + Math.sin(time * 4 + m.x) * 2, st = m.stun > 0;
+  ctx.fillStyle = st ? "#9aa" : "hsl(" + m.hue + ",70%,70%)"; ctx.globalAlpha = .9;
+  ctx.beginPath(); ctx.arc(x, y - 2, 13, Math.PI, 0); ctx.lineTo(x + 13, y + 12);
+  for (let k = 3; k >= -3; k--) ctx.lineTo(x + k * 4.3, y + 12 - (k % 2 ? 0 : 5)); ctx.fill(); ctx.globalAlpha = 1;
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x - 5, y - 3, 4, 0, 7); ctx.arc(x + 5, y - 3, 4, 0, 7); ctx.fill();
+  ctx.fillStyle = st ? "#555" : "#c00"; ctx.beginPath(); ctx.arc(x - 5 + (st ? 0 : Math.sign(P.x - m.x)), y - 3, 2, 0, 7); ctx.arc(x + 5 + (st ? 0 : Math.sign(P.x - m.x)), y - 3, 2, 0, 7); ctx.fill();
+  if (st) { ctx.fillStyle = "#ffd23f"; for (let k = 0; k < 3; k++) ctx.fillText("★", x - 12 + k * 10, y - 18 + Math.sin(time * 6 + k) * 3); }
+}
+function drawWorld() {
+  const c0 = Math.max(0, Math.floor(cam.x / T)), c1 = Math.min(mw - 1, Math.ceil((cam.x + W) / T)), r0 = Math.max(0, Math.floor(cam.y / T)), r1 = Math.min(mh - 1, Math.ceil((cam.y + H) / T));
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const x = c * T - cam.x, y = r * T - cam.y;
+    if (map[r * mw + c] === 1) {
+      ctx.fillStyle = "#5b4636"; ctx.fillRect(x, y, T, T);
+      ctx.fillStyle = "#6e5642"; ctx.fillRect(x + 1, y + 1, T - 2, T / 2 - 2); ctx.fillRect(x + 1, y + T / 2 + 1, T / 2 - 2, T / 2 - 2); ctx.fillRect(x + T / 2 + 1, y + T / 2 + 1, T / 2 - 2, T / 2 - 2);
+      ctx.fillStyle = "rgba(0,0,0,.25)"; ctx.fillRect(x, y + T - 4, T, 4);
+    } else { ctx.fillStyle = (c + r) % 2 ? "#3a3a44" : "#40404b"; ctx.fillRect(x, y, T, T); }
+  }
+  for (const c of coins) if (!c.got) { const w = Math.abs(Math.cos(time * 4 + c.x)) * 5 + 1; ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.ellipse(c.x - cam.x, c.y - cam.y, w, 6, 0, 0, 7); ctx.fill(); }
+  for (const h of hearts) if (!h.got) { const x = h.x - cam.x, y = h.y - cam.y + Math.sin(time * 4) * 2; ctx.fillStyle = "#ff3d6e"; ctx.beginPath(); ctx.arc(x - 5, y - 3, 6, 0, 7); ctx.arc(x + 5, y - 3, 6, 0, 7); ctx.moveTo(x - 11, y - 1); ctx.lineTo(x, y + 11); ctx.lineTo(x + 11, y - 1); ctx.fill(); }
+  for (const s of stars) if (!s.got) { const x = s.x - cam.x, y = s.y - cam.y + Math.sin(time * 4 + s.x) * 2;
+    ctx.fillStyle = "rgba(125,240,255,.25)"; ctx.beginPath(); ctx.arc(x, y, 17 + Math.sin(time * 6) * 2, 0, 7); ctx.fill();
+    ctx.fillStyle = "#7df0ff"; ctx.beginPath();
+    for (let q = 0; q < 10; q++) { const r = q % 2 ? 5 : 11, an = q * Math.PI / 5 - Math.PI / 2 + time * 2; ctx.lineTo(x + Math.cos(an) * r, y + Math.sin(an) * r); } ctx.fill(); }
+  for (const k of keysItems) if (!k.got) { const x = k.x - cam.x, y = k.y - cam.y + Math.sin(time * 4 + k.x) * 2;
+    ctx.fillStyle = "#ffd23f"; ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x - 6, y, 6, 0, 7); ctx.stroke();
+    ctx.fillRect(x - 1, y - 1.5, 14, 3); ctx.fillRect(x + 7, y, 3, 6); ctx.fillRect(x + 11, y, 3, 4); }
+  const open = got >= need, cx = chest.x - cam.x, cy = chest.y - cam.y;
+  if (open) { ctx.fillStyle = "rgba(255,210,63," + (.25 + Math.sin(time * 5) * .1) + ")"; ctx.beginPath(); ctx.arc(cx, cy, 30, 0, 7); ctx.fill(); }
+  ctx.fillStyle = "#8a5a2a"; ctx.fillRect(cx - 15, cy - 8, 30, 20); ctx.fillStyle = "#a8712f"; ctx.fillRect(cx - 15, cy - 14, 30, 9);
+  ctx.fillStyle = "#ffd23f"; ctx.fillRect(cx - 15, cy - 6, 30, 3); ctx.fillRect(cx - 3, cy - 8, 6, 9);
+  ctx.fillStyle = open ? "#7dff7d" : "#c8281e"; ctx.fillRect(cx - 2, cy - 5, 4, 5);
+  for (const m of monsters) if (Math.hypot(m.x - P.x, m.y - P.y) < lightR() * 1.0) drawMonster(m);
+  if (P.power > 0) { ctx.fillStyle = "hsla(" + (time * 400) % 360 + ",100%,70%," + (P.power < 2 && Math.floor(time * 10) % 2 ? .1 : .35) + ")"; ctx.beginPath(); ctx.arc(P.x - cam.x, P.y - cam.y, 22, 0, 7); ctx.fill(); }
+  if (!(P.inv > 0 && Math.floor(time * 14) % 2)) drawHero(hero, P.x - cam.x, P.y - cam.y, P.dir, P.step, 1);
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x - cam.x, p.y - cam.y, 4, 4); } ctx.globalAlpha = 1;
+}
+function drawDarkness() {
+  dctx.globalCompositeOperation = "source-over"; dctx.fillStyle = "rgba(0,0,0,.8)"; dctx.fillRect(0, 0, W, H);
+  dctx.globalCompositeOperation = "destination-out";
+  const c0 = Math.max(0, Math.floor(cam.x / T)), c1 = Math.min(mw - 1, Math.ceil((cam.x + W) / T)), r0 = Math.max(0, Math.floor(cam.y / T)), r1 = Math.min(mh - 1, Math.ceil((cam.y + H) / T));
+  dctx.fillStyle = "rgba(0,0,0,.65)";
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (seen[r * mw + c]) dctx.fillRect(c * T - cam.x, r * T - cam.y, T, T);
+  const R = lightR(), px = P.x - cam.x, py = P.y - cam.y, flick = 1 + Math.sin(time * 9) * .02;
+  const g = dctx.createRadialGradient(px, py, 0, px, py, R * flick);
+  g.addColorStop(0, "rgba(0,0,0,1)"); g.addColorStop(.5, "rgba(0,0,0,1)"); g.addColorStop(1, "rgba(0,0,0,0)");
+  dctx.fillStyle = g; dctx.fillRect(0, 0, W, H);
+  ctx.drawImage(dk, 0, 0);
+  if (flashT > 0) { ctx.strokeStyle = "rgba(255,240,160," + flashT / .6 + ")"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(px, py, 200 * (1 - flashT / .6) + 20, 0, 7); ctx.stroke(); }
+}
+function drawHUD() {
+  text("Score " + score, 14, 30, 22, "#ffd23f", "left");
+  text("Niveau " + level + "/" + TOTAL, W / 2, 30, 20, "#fff");
+  text("♥".repeat(Math.max(0, lives)), W - 14, 30, 24, "#ff5a6e", "right");
+  text("🗝 " + got + "/" + need, 14, 58, 18, "#ffd23f", "left");
+  ctx.fillStyle = "#0008"; ctx.fillRect(14, H - 26, 120, 12); ctx.fillStyle = flashCd > 0 ? "#888" : "#ffe98a"; ctx.fillRect(14, H - 26, 120 * (1 - flashCd / 4), 12);
+  text("ÉCLAIR (espace)", 74, H - 32, 11, "#fff");
+  text(Snd.muted ? "🔇 M" : "🔊 M", W - 12, H - 10, 12, "#cfe", "right");
+  if (msgT > 0) text(msg, W / 2, 80, 20, "#fff");
+  if (P.power > 0) text("⭐ Pouvoir : " + Math.ceil(P.power) + "s", 14, 84, 16, "#7df0ff", "left");
+  // flèche vers l'objectif
+  const tg = got >= need ? chest : keysItems.filter(k => !k.got).sort((a, b) => Math.hypot(a.x - P.x, a.y - P.y) - Math.hypot(b.x - P.x, b.y - P.y))[0];
+  if (tg) { const a = Math.atan2(tg.y - P.y, tg.x - P.x); ctx.save(); ctx.translate(P.x - cam.x + Math.cos(a) * 32, P.y - cam.y + Math.sin(a) * 32); ctx.rotate(a);
+    ctx.fillStyle = "rgba(255,210,63,.85)"; ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-5, -6); ctx.lineTo(-5, 6); ctx.fill(); ctx.restore(); }
+}
+function draw() {
+  ctx.fillStyle = "#0b0907"; ctx.fillRect(0, 0, W, H);
+  if (state === "title") {
+    ctx.fillStyle = "#14100c"; ctx.fillRect(0, 0, W, H);
+    for (let i = 0; i < 40; i++) { ctx.fillStyle = "rgba(255,210,63," + (.1 + .1 * Math.sin(time * 2 + i)) + ")"; ctx.fillRect((i * 97) % W, (i * 61) % H, 3, 3); }
+    text("LABYRINTHE DU TRÉSOR", W / 2, 120, 50, "#ffd23f");
+    text("Trouve les clés, ouvre le coffre... et fuis les fantômes !", W / 2, 165, 20);
+    text("← ↑ ↓ → : marcher   •   ESPACE : éclair de lumière (étourdit les fantômes)", W / 2, 215, 15, "#cfe");
+    text("P : pause   •   M : musique   •   La flèche jaune te montre où aller", W / 2, 240, 15, "#cfe");
+    text("⭐ Une étoile = 8 secondes de pouvoir : tu traverses les fantômes et tu cours plus vite !", W / 2, 268, 15, "#7df0ff");
+    text("◀  " + HEROES[hero].name + "  ▶   (Tab ou clic gauche/droite)", W / 2, 320, 22, "#ffd23f");
+    drawHero(hero, W / 2, 385, { x: 0, y: 1 }, time * 6, 2.2);
+    text("Appuie sur ESPACE pour entrer", W / 2, 490, 26);
+    if (best) text("Record : " + best, W / 2, 535, 18, "#bde");
+    return;
+  }
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - .5) * shake * 20, (Math.random() - .5) * shake * 20);
+  drawWorld(); drawDarkness();
+  ctx.restore(); drawHUD();
+  if (banner > 0 && state === "play") text(level === 1 ? "Trouve " + need + " clés !" : "Niveau " + level + " : " + need + " clés", W / 2, 300, 40);
+  if (paused) { ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(0, 0, W, H); text("PAUSE", W / 2, H / 2, 60); }
+  if (state === "clear") { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); text("Trésor trouvé !", W / 2, 270, 54, "#ffd23f"); text(msg, W / 2, 320, 24); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.7)"; ctx.fillRect(0, 0, W, H); text("GAME OVER", W / 2, 240, 64, "#ff5a6e"); text("Score : " + score + "  •  Niveau " + level, W / 2, 300, 24);
+    if (score >= best && score > 0) text("Nouveau record !", W / 2, 340, 24, "#ffd23f"); text("ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.7)"; ctx.fillRect(0, 0, W, H); text("BRAVO " + (hero === 0 ? "DIEGO" : "L'EXPLORATEUR") + " !", W / 2, 230, 56, "#ffd23f");
+    text("Tu as trouvé tous les trésors !", W / 2, 290, 26); text("Score final : " + score + (score >= best ? "  (record !)" : ""), W / 2, 335, 24); text("ESPACE pour rejouer", W / 2, 410, 22, "#bde"); }
+}
+
+/* ---------------- Entrées & boucle ---------------- */
+function cycleHero(f) { hero = (hero + (f ? 1 : HEROES.length - 1)) % HEROES.length; }
+addEventListener("keydown", e => {
+  if (e.code === "Escape") { location.href = "../index.html?hero=" + hero; return; }
+  if (/^(Arrow(Up|Down|Left|Right)|Space|Tab)$/.test(e.code)) e.preventDefault();
+  Snd.init();
+  if (e.code === "KeyM") { Snd.toggleMute(); return; }
+  if (e.code === "KeyP" && state === "play") { paused = !paused; return; }
+  if (state === "title") {
+    if (/^Arrow/.test(e.code) || e.code === "Tab") { cycleHero(e.code === "ArrowDown" || e.code === "ArrowRight" || e.code === "Tab"); return; }
+    if (e.code === "Space") { newGame(); return; }
+  }
+  if ((state === "over" && overT <= 0 || state === "win") && e.code === "Space") { newGame(); return; }
+  if (state === "play" && e.code === "Space" && !e.repeat && !paused && flashCd <= 0) {
+    flashT = .6; flashCd = 4; Snd.sfx("flash");
+    monsters.forEach(m => { if (Math.hypot(m.x - P.x, m.y - P.y) < 280) { m.stun = 5; burst(m.x, m.y, "#fff", 8); } });
+  }
+  keys[e.code] = true;
+});
+addEventListener("keyup", e => { keys[e.code] = false; });
+addEventListener("blur", () => { for (const k in keys) keys[k] = false; if (state === "play") paused = true; });
+cv.addEventListener("click", e => { if (state !== "title") return; const r = cv.getBoundingClientRect(); cycleHero(e.clientX > r.left + r.width / 2); });
+
+let last = performance.now();
+function frame(now) { const dt = Math.min(.05, (now - last) / 1000); last = now; update(dt); draw(); requestAnimationFrame(frame); }
+requestAnimationFrame(frame);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

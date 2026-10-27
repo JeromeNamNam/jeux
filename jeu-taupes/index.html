@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chasse aux Taupes</title>
+<style>
+  html,body{margin:0;height:100%;background:#1a2a10;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, DUR = 25;
+let hero = heroIndexFromUrl(), state = "title", time = 0, score = 0, best = 0, left = DUR, level = 1, lvlStart = 0, banner = 0, cur = 4, swing = 0, combo = 0, hits = 0, misses = 0, overT = 0, spawnT = 0, shake = 0, floats = [], holes = [];
+try { best = +localStorage.getItem("taupes-best") || 0; } catch (e) {}
+const pos = i => ({ x: 200 + (i % 3) * 200, y: 230 + Math.floor(i / 3) * 135 });
+
+const need = () => 50 + level * 18;
+function newGame() { level = 1; lvlStart = 0; banner = 1.6; score = 0; left = DUR; combo = 0; hits = 0; misses = 0; spawnT = .5; floats = []; holes = Array.from({ length: 9 }, () => ({ t: 0, life: 0, kind: "", up: 0, hit: 0 })); state = "play"; }
+function spawn() {
+  const free = holes.map((h, i) => (h.life <= 0 ? i : -1)).filter(i => i >= 0); if (!free.length) return;
+  const i = free[Math.floor(Math.random() * free.length)], r = Math.random(), el = DUR - left, h = holes[i];
+  h.kind = r < .12 ? "gold" : r < .27 ? "bomb" : "mole"; h.life = Math.max(.4, 1.5 - level * .08 - el * .012) * (h.kind === "gold" ? .75 : 1); h.t = 0; h.hit = 0;
+}
+function strike() {
+  if (swing > 0) return; swing = .18; const h = holes[cur];
+  if (h.life > 0 && h.hit <= 0 && h.up > .5) {
+    h.hit = .4;
+    if (h.kind === "bomb") { score = Math.max(0, score - 20); combo = 0; Music.sfx("hit"); shake = .3; floats.push({ x: pos(cur).x, y: pos(cur).y - 60, t: "-20 💥", life: 1, c: "#ff5a6e" }); }
+    else { combo++; const pts = (h.kind === "gold" ? 30 : 10) + Math.min(20, (combo - 1) * 2); score += pts; hits++; Music.sfx(h.kind === "gold" ? "match" : "coin"); floats.push({ x: pos(cur).x, y: pos(cur).y - 60, t: "+" + pts, life: 1, c: "#ffd23f" }); }
+  } else { misses++; combo = 0; Music.sfx("bounce"); }
+}
+function update(dt) {
+  time += dt; overT -= dt; banner -= dt; shake = Math.max(0, shake - dt); swing = Math.max(0, swing - dt);
+  for (let i = floats.length - 1; i >= 0; i--) { floats[i].life -= dt; floats[i].y -= 40 * dt; if (floats[i].life <= 0) floats.splice(i, 1); }
+  if (state !== "play" || Kit.paused) return;
+  left -= dt;
+  if (left <= 0) {
+    const ok = score - lvlStart >= need(), save = () => { if (score > best) { best = score; try { localStorage.setItem("taupes-best", best); } catch (e) {} } };
+    if (!ok) { state = "over"; overT = .8; Music.sfx("lose"); save(); }
+    else if (level >= 10) { state = "win"; overT = .8; Music.sfx("win"); save(); }
+    else { level++; lvlStart = score; left = DUR; banner = 1.6; combo = 0; Music.sfx("level"); for (const h of holes) { h.life = 0; h.up = 0; h.hit = 0; } }
+    return;
+  }
+  spawnT -= dt; if (spawnT <= 0) { spawn(); spawnT = Math.max(.22, .85 - level * .05); }
+  for (const h of holes) {
+    if (h.hit > 0) { h.hit -= dt; if (h.hit <= 0) { h.life = 0; h.up = 0; } else { h.up = Math.max(0, h.up - dt * 3); } continue; }
+    if (h.life > 0) { h.t += dt; h.up = Math.min(1, h.t * 8, (h.life - h.t) * 8); if (h.t >= h.life) { if (h.kind === "mole" || h.kind === "gold") combo = 0; h.life = 0; h.up = 0; } }
+  }
+}
+
+function drawMole(h, x, y) {
+  if (h.up <= .02) return; const k = h.kind, y0 = y + 20 - h.up * 58;
+  ctx.save(); ctx.beginPath(); ctx.rect(x - 60, y - 90, 120, 108); ctx.clip();
+  if (k === "bomb") { ctx.fillStyle = "#222"; ctx.beginPath(); ctx.arc(x, y0 + 20, 26, 0, 7); ctx.fill(); ctx.strokeStyle = "#ddd"; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(x + 10, y0 - 4); ctx.quadraticCurveTo(x + 22, y0 - 20, x + 30, y0 - 12); ctx.stroke();
+    ctx.fillStyle = Math.floor(time * 12) % 2 ? "#ff5a1a" : "#ffd23f"; ctx.beginPath(); ctx.arc(x + 31, y0 - 13, 6, 0, 7); ctx.fill(); ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x - 8, y0 + 14, 5, 0, 7); ctx.arc(x + 8, y0 + 14, 5, 0, 7); ctx.fill(); ctx.fillStyle = "#c00"; ctx.fillRect(x - 10, y0 + 12, 4, 4); ctx.fillRect(x + 6, y0 + 12, 4, 4); }
+  else { ctx.fillStyle = k === "gold" ? "#ffd23f" : "#8a5a3a"; if (k === "gold") { ctx.shadowColor = "#ffd23f"; ctx.shadowBlur = 16; } ctx.beginPath(); ctx.arc(x, y0 + 22, 30, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.fillStyle = k === "gold" ? "#fff2a0" : "#c89a72"; ctx.beginPath(); ctx.ellipse(x, y0 + 32, 16, 12, 0, 0, 7); ctx.fill(); ctx.fillStyle = "#ff8fa0"; ctx.beginPath(); ctx.arc(x, y0 + 28, 5, 0, 7); ctx.fill();
+    ctx.fillStyle = "#111"; if (h.hit > 0) { ctx.font = "bold 16px sans-serif"; ctx.textAlign = "center"; ctx.fillText("× ×", x, y0 + 18); } else { ctx.beginPath(); ctx.arc(x - 11, y0 + 16, 4, 0, 7); ctx.arc(x + 11, y0 + 16, 4, 0, 7); ctx.fill(); }
+    ctx.fillStyle = "#fff"; ctx.fillRect(x - 4, y0 + 36, 8, 7); }
+  ctx.restore();
+}
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#7fd6ff"); g.addColorStop(.28, "#c8f0ff"); g.addColorStop(.28, "#6ec04a"); g.addColorStop(1, "#3f8a2a"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.save(); if (shake > 0) ctx.translate((Math.random() - .5) * shake * 20, (Math.random() - .5) * shake * 20);
+  for (let i = 0; i < 9; i++) {
+    const p = pos(i); ctx.fillStyle = "#3a2410"; ctx.beginPath(); ctx.ellipse(p.x, p.y + 20, 62, 22, 0, 0, 7); ctx.fill();
+    if (holes[i]) drawMole(holes[i], p.x, p.y);
+    ctx.fillStyle = "#5a3a1a"; ctx.beginPath(); ctx.ellipse(p.x, p.y + 30, 66, 16, 0, 0, Math.PI); ctx.fill();
+  }
+  if (state !== "title") {
+    const p = pos(cur), a = swing > 0 ? 1 - swing / .18 : 0;
+    ctx.strokeStyle = HEROES[hero].ship.color; ctx.lineWidth = 5; ctx.setLineDash([10, 8]); ctx.beginPath(); ctx.ellipse(p.x, p.y + 20, 70, 28, 0, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+    ctx.save(); ctx.translate(p.x + 50, p.y - 70 + a * 40); ctx.rotate(-.6 + a * .9); ctx.fillStyle = "#8a5a2a"; ctx.fillRect(-4, 0, 8, 70); ctx.fillStyle = HEROES[hero].ship.color; ctx.fillRect(-20, -26, 40, 28); ctx.restore();
+    ctx.save(); ctx.translate(p.x + 70, p.y - 30); ctx.scale(1.4, 1.4); heroTop(ctx, HEROES[hero], { x: -1, y: 0 }, 0, time); ctx.restore();
+  }
+  ctx.restore();
+  for (const f of floats) { ctx.globalAlpha = Math.min(1, f.life * 2); Kit.text(ctx, f.t, f.x, f.y, 28, f.c); } ctx.globalAlpha = 1;
+  if (state === "title") {
+    ctx.fillStyle = "rgba(10,40,10,.6)"; ctx.fillRect(0, 0, W, H);
+    Kit.text(ctx, "CHASSE AUX TAUPES", W / 2, 120, 52, "#ffd23f");
+    Kit.text(ctx, "10 niveaux : atteins l'objectif en " + DUR + " secondes !", W / 2, 170, 22);
+    Kit.text(ctx, "← ↑ ↓ → : choisir le trou   •   ESPACE : taper !   •   P : pause   •   M : musique", W / 2, 218, 15, "#cfe");
+    Kit.text(ctx, "🟤 taupe +10     🟡 taupe dorée +30     💣 bombe : évite-la !     Enchaîne pour des bonus.", W / 2, 245, 15, "#ffd23f");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 320, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 390); ctx.scale(2.6, 2.6); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 6), time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 510, 26); if (best) Kit.text(ctx, "Record : " + best, W / 2, 553, 18, "#fff");
+    return;
+  }
+  ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fillRect(0, 0, W, 44);
+  Kit.text(ctx, "Score " + score, 14, 32, 24, "#ffd23f", "left"); Kit.text(ctx, "Niveau " + level + "/10  •  objectif +" + need() + "  (" + Math.max(0, score - lvlStart) + ")", W / 2, 70, 18, "#fff");
+  if (banner > 0 && state === "play") Kit.text(ctx, "Niveau " + level, W / 2, 330, 54); Kit.text(ctx, "⏱ " + Math.ceil(left) + " s", W / 2, 32, 26, left < 10 ? "#ff5a6e" : "#fff");
+  Kit.text(ctx, combo > 1 ? "Combo x" + combo : "Record " + Math.max(best, score), W - 14, 32, 20, combo > 1 ? "#6ee06e" : "#fff", "right");
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "ROI DES TAUPES !", W / 2, 240, 56, "#ffd23f"); Kit.text(ctx, "10 niveaux réussis ! Score : " + score, W / 2, 305, 26); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "OBJECTIF MANQUÉ !", W / 2, 240, 58, "#ffd23f"); Kit.text(ctx, "Score : " + score + "  •  " + hits + " taupes", W / 2, 305, 26);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 345, 24, "#6ee06e"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 410, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "brick", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (state === "title" || ((state === "over" || state === "win") && overT <= 0)) { if (e.code === "Space") newGame(); return; }
+    if (state !== "play" || Kit.paused) return;
+    let x = cur % 3, y = Math.floor(cur / 3);
+    if (e.code === "ArrowLeft") x = (x + 2) % 3; else if (e.code === "ArrowRight") x = (x + 1) % 3; else if (e.code === "ArrowUp") y = (y + 2) % 3; else if (e.code === "ArrowDown") y = (y + 1) % 3;
+    else if (e.code === "Space") { strike(); return; } else return;
+    cur = y * 3 + x;
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Course de la Jungle</title>
+<style>
+  html,body{margin:0;height:100%;background:#06180c;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, GY = 470, PX = 170;
+let hero = heroIndexFromUrl(), state = "title", time = 0, dist = 0, coins = 0, lives = 3, best = 0, overT = 0;
+let P, obs = [], items = [], parts = [], spawnT = 0, speed = 300;
+try { best = +localStorage.getItem("course-best") || 0; } catch (e) {}
+
+function newGame() { P = { y: GY, vy: 0, jumps: 0, duck: false, inv: 0, anim: 0 }; obs = []; items = []; parts = []; dist = 0; coins = 0; lives = 3; spawnT = 1; speed = 300; state = "play"; }
+const score = () => Math.floor(dist / 10) + coins * 5;
+function jump() { if (P.jumps >= 2) return; P.vy = P.jumps === 0 ? -820 : -720; P.jumps++; Music.sfx("jump"); }
+function inPit(x) { return obs.some(o => o.type === "pit" && x > o.x && x < o.x + o.w); }
+function spawn() {
+  const r = Math.random(), x = W + 60;
+  if (r < .3) obs.push({ type: "rock", x, w: 44, h: 40 });
+  else if (r < .5) obs.push({ type: "bush", x, w: 40, h: 70 });
+  else if (r < .75) obs.push({ type: "pit", x, w: 130 + Math.random() * 60, h: 0 });
+  else obs.push({ type: "bird", x, w: 40, h: 24, y: GY - 62 });
+  const last = obs[obs.length - 1];
+  const n = 3 + Math.floor(Math.random() * 3), cy = last.type === "bird" ? GY - 120 : GY - 100 - Math.random() * 40;
+  for (let i = 0; i < n; i++) items.push({ x: x + last.w / 2 + (i - n / 2) * 36 , y: cy - Math.sin(i / (n - 1 || 1) * Math.PI) * 50, got: false });
+}
+function hurt() {
+  if (P.inv > 0) return; lives--; Music.sfx("hit"); P.inv = 2;
+  if (lives <= 0) { state = "over"; overT = .8; Music.sfx("lose"); if (score() > best) { best = score(); try { localStorage.setItem("course-best", best); } catch (e) {} } }
+}
+
+function update(dt) {
+  time += dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  if (state === "over" || state === "win") overT -= dt;
+  if (state !== "play" || Kit.paused) return;
+  const k = Kit.keys; speed = Math.min(620, 300 + dist / 60); dist += speed * dt;
+  if (dist >= 25000) { state = "win"; overT = .8; Music.sfx("win"); if (score() > best) { best = score(); try { localStorage.setItem("course-best", best); } catch (e) {} } return; } P.anim += dt * speed * .03;
+  P.duck = !!k.ArrowDown && P.y >= GY - 1; if (P.inv > 0) P.inv -= dt;
+  P.vy += 2300 * dt; P.y += P.vy * dt;
+  const solid = !inPit(PX) || P.inv > 0;
+  if (P.y >= GY && solid && P.vy >= 0) { P.y = GY; P.vy = 0; P.jumps = 0; }
+  if (P.y > GY + 140) { hurt(); P.y = GY - 200; P.vy = 0; P.inv = Math.max(P.inv, 2); }
+  spawnT -= dt; if (spawnT <= 0) { spawn(); spawnT = 1.5 - Math.min(.75, speed / 900) + Math.random() * .5; }
+  const ph = P.duck ? 28 : 56, box = { x: PX - 13, y: P.y - ph, w: 26, h: ph };
+  for (const o of obs) {
+    o.x -= speed * dt;
+    if (o.type === "pit") continue;
+    const oy = o.type === "bird" ? o.y : GY - o.h;
+    if (box.x < o.x + o.w - 4 && box.x + box.w > o.x + 4 && box.y < oy + o.h && box.y + box.h > oy) hurt();
+  }
+  obs = obs.filter(o => o.x + o.w > -60);
+  for (const it of items) { it.x -= speed * dt; if (!it.got && Math.hypot(it.x - PX, it.y - (P.y - ph / 2)) < 30) { it.got = true; coins++; Music.sfx("coin"); } }
+  items = items.filter(i => i.x > -30 && !i.got);
+  if (P.y >= GY && Math.random() < .3) parts.push({ x: PX - 10, y: GY, vx: -80 - Math.random() * 60, vy: -Math.random() * 60, life: .3, c: "#c9a46a" });
+}
+
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#74d6a0"); g.addColorStop(1, "#d8f5c0"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#ffe97a"; ctx.beginPath(); ctx.arc(660, 100, 44, 0, 7); ctx.fill();
+  const d = dist;
+  for (let layer = 0; layer < 3; layer++) {
+    const sp = [.1, .25, .5][layer], col = ["#3a9a6a", "#2a7a4a", "#1f5f3a"][layer], step = [220, 160, 120][layer];
+    ctx.fillStyle = col; for (let i = -1; i < 8; i++) { const x = i * step - (d * sp) % step, h = 120 + layer * 40 + ((i + 100) * 37 % 50);
+      ctx.fillRect(x + step / 2 - 6, GY - h, 12, h); ctx.beginPath(); ctx.arc(x + step / 2, GY - h, 40 + layer * 14, 0, 7); ctx.fill(); }
+  }
+  ctx.fillStyle = "#7a4e2d"; ctx.fillRect(0, GY, W, H - GY);
+  ctx.fillStyle = "#58b04a"; ctx.fillRect(0, GY, W, 12);
+  if (obs) for (const o of obs) {
+    if (o.type === "pit") { ctx.fillStyle = "#1a0f08"; ctx.fillRect(o.x, GY, o.w, H - GY); ctx.fillStyle = "#06180c"; ctx.fillRect(o.x, GY + 40, o.w, H); }
+    else if (o.type === "rock") { ctx.fillStyle = "#7a808c"; ctx.beginPath(); ctx.ellipse(o.x + o.w / 2, GY - 20, 24, 22, 0, 0, 7); ctx.fill(); ctx.fillStyle = "#9aa0aa"; ctx.beginPath(); ctx.ellipse(o.x + o.w / 2 - 6, GY - 28, 10, 7, 0, 0, 7); ctx.fill(); }
+    else if (o.type === "bush") { ctx.fillStyle = "#2a8a3a"; ctx.beginPath(); ctx.arc(o.x + 12, GY - 20, 18, 0, 7); ctx.arc(o.x + 28, GY - 24, 18, 0, 7); ctx.arc(o.x + 20, GY - 50, 18, 0, 7); ctx.fill(); ctx.fillStyle = "#ff5a6e"; ctx.beginPath(); ctx.arc(o.x + 14, GY - 24, 4, 0, 7); ctx.arc(o.x + 28, GY - 46, 4, 0, 7); ctx.fill(); }
+    else { const wy = Math.sin(time * 14) * 8; ctx.fillStyle = "#6a3fc4"; ctx.beginPath(); ctx.ellipse(o.x + 20, o.y + 12, 18, 11, 0, 0, 7); ctx.fill(); ctx.fillStyle = "#b07dff"; ctx.beginPath(); ctx.moveTo(o.x + 12, o.y + 8); ctx.lineTo(o.x + 24, o.y - 10 + wy); ctx.lineTo(o.x + 32, o.y + 8); ctx.fill();
+      ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.moveTo(o.x + 2, o.y + 12); ctx.lineTo(o.x - 8, o.y + 15); ctx.lineTo(o.x + 2, o.y + 18); ctx.fill(); ctx.fillStyle = "#fff"; ctx.fillRect(o.x + 6, o.y + 7, 5, 5); ctx.fillStyle = "#111"; ctx.fillRect(o.x + 6, o.y + 8, 3, 3); }
+  }
+  if (items) for (const it of items) { const w = Math.abs(Math.cos(time * 5 + it.x * .04)) * 7 + 2; ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.ellipse(it.x, it.y, w, 10, 0, 0, 7); ctx.fill(); ctx.strokeStyle = "#c98a00"; ctx.lineWidth = 2; ctx.stroke(); }
+  if (parts) for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 3); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 4, 4); } ctx.globalAlpha = 1;
+  if (state === "title") {
+    ctx.fillStyle = "rgba(6,40,20,.6)"; ctx.fillRect(0, 0, W, H);
+    Kit.text(ctx, "COURSE DE LA JUNGLE", W / 2, 120, 50, "#ffd23f");
+    Kit.text(ctx, "Cours le plus loin possible, ramasse les pièces !", W / 2, 170, 22);
+    Kit.text(ctx, "ESPACE ou ↑ : sauter (double saut !)   •   ↓ : se baisser sous les oiseaux", W / 2, 220, 15, "#cfe");
+    Kit.text(ctx, "Saute par-dessus les rochers, les buissons et les trous.   P : pause   M : musique", W / 2, 245, 15, "#cfe");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 320, 22, "#ffd23f");
+    ctx.save(); ctx.translate(W / 2, 360); ctx.scale(2.2, 2.2); heroSide(ctx, HEROES[hero], Math.sin(time * 10) * 5, true, time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour courir", W / 2, 510, 26);
+    if (best) Kit.text(ctx, "Record : " + best, W / 2, 553, 18, "#fff");
+    return;
+  }
+  if (!(P.inv > 0 && Math.floor(time * 14) % 2)) {
+    ctx.save(); ctx.translate(PX, P.y - 56 * (P.duck ? .5 : 1) + (P.duck ? 0 : 0)); const sc = 1.5; ctx.translate(0, P.duck ? 22 : 0);
+    ctx.scale(sc, P.duck ? sc * .55 : sc); ctx.translate(0, -2); heroSide(ctx, HEROES[hero], P.y >= GY ? Math.sin(P.anim * 2) * 6 : 0, P.y >= GY, time); ctx.restore();
+  }
+  Kit.text(ctx, "Score " + score(), 14, 34, 24, "#ffd23f", "left"); Kit.text(ctx, "🪙 " + coins, 14, 62, 18, "#fff", "left"); Kit.text(ctx, "Niveau " + Math.min(10, 1 + Math.floor(dist / 2500)) + "/10  •  " + Math.floor(dist / 10) + " m", W / 2, 34, 20, "#fff");
+  Kit.text(ctx, "♥".repeat(Math.max(0, lives)), W - 14, 34, 26, "#ff5a6e", "right"); Kit.text(ctx, "Record " + Math.max(best, score()), W - 14, 62, 16, "#fff", "right");
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "BRAVO !", W / 2, 240, 64, "#ffd23f"); Kit.text(ctx, "Tu as traversé la jungle (2500 m) ! Score : " + score(), W / 2, 300, 24); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "GAME OVER", W / 2, 240, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score() + "  •  " + Math.floor(dist / 10) + " m", W / 2, 300, 26);
+    if (score() >= best && score() > 0) Kit.text(ctx, "Nouveau record !", W / 2, 340, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "run", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (state === "title") { if (e.code === "Space") newGame(); }
+    else if (state === "play") { if ((e.code === "Space" || e.code === "ArrowUp") && !Kit.paused) jump(); }
+    else if ((state === "over" || state === "win") && e.code === "Space" && overT <= 0) newGame();
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

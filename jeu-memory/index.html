@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Memory des Héros</title>
+<style>
+  html,body{margin:0;height:100%;background:#12202e;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, TOTAL = 10;
+const LEVELS = [[4, 3], [4, 4], [5, 4], [6, 4], [5, 6], [6, 6], [8, 4], [8, 5], [8, 5], [8, 5]];
+let hero = heroIndexFromUrl(), state = "title", time = 0, level = 1, score = 0, best = 0, moves = 0, lvlTime = 0, cur = 0, first = -1, second = -1, wait = 0, streak = 0, banner = 0, overT = 0;
+let cards = [], cols = 4, rows = 3, parts = [];
+try { best = +localStorage.getItem("memory-best") || 0; } catch (e) {}
+
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function startLevel() {
+  [cols, rows] = LEVELS[level - 1]; const pairs = cols * rows / 2;
+  const others = shuffle(HEROES.map((_, i) => i).filter(i => i !== hero)).slice(0, pairs - 1), ids = shuffle([hero, ...others].flatMap(i => [i, i]));
+  cards = ids.map(id => ({ id, flip: 0, up: false, done: false })); cur = 0; first = second = -1; wait = 0; moves = 0; lvlTime = 0; streak = 0; state = "play"; banner = 1.6;
+}
+function newGame() { level = 1; score = 0; startLevel(); }
+function geom() { const cw = Math.min(120, (W - 100) / cols - 12, (H - 170) / rows - 12), ch = cw * 1.1; return { cw, ch, x0: (W - cols * (cw + 12) + 12) / 2, y0: 100 + ((H - 120) - rows * (ch + 12) + 12) / 2 }; }
+function pick() {
+  const c = cards[cur]; if (wait > 0 || c.up || c.done) return;
+  c.up = true; Music.sfx("flip");
+  if (first < 0) { first = cur; return; }
+  second = cur; moves++;
+  if (cards[first].id === cards[second].id) { wait = .5; }
+  else { wait = Math.max(.45, 1 - level * .06); streak = 0; }
+}
+function update(dt) {
+  time += dt; banner -= dt; overT -= dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  if (state !== "play" || Kit.paused) return;
+  lvlTime += dt;
+  for (const c of cards) c.flip += ((c.up || c.done ? 1 : 0) - c.flip) * Math.min(1, dt * 14);
+  if (wait > 0) {
+    wait -= dt;
+    if (wait <= 0 && second >= 0) {
+      const a = cards[first], b = cards[second];
+      if (a.id === b.id) {
+        a.done = b.done = true; streak++; score += 100 + 50 * (streak - 1); Music.sfx("match");
+        const gm = geom(); [first, second].forEach(i => { const x = gm.x0 + (i % cols) * (gm.cw + 12) + gm.cw / 2, y = gm.y0 + Math.floor(i / cols) * (gm.ch + 12) + gm.ch / 2; for (let k = 0; k < 10; k++) { const an = Math.random() * 6.3, s = 60 + Math.random() * 140; parts.push({ x, y, vx: Math.cos(an) * s, vy: Math.sin(an) * s, life: .5, c: "#ffd23f" }); } });
+        if (cards.every(c => c.done)) {
+          score += Math.max(0, Math.round(200 - lvlTime * 2 - moves * 3)) + 100 * level; Music.sfx("level");
+          if (level >= TOTAL) { state = "win"; Music.sfx("win"); if (score > best) { best = score; try { localStorage.setItem("memory-best", best); } catch (e) {} } } else { level++; startLevel(); }
+        }
+      } else { a.up = b.up = false; Music.sfx("nope"); }
+      first = second = -1;
+    }
+  }
+}
+
+function drawCard(c, x, y, w, h, sel) {
+  const sx = Math.abs(Math.cos(c.flip * Math.PI)), face = c.flip > .5;
+  ctx.save(); ctx.translate(x + w / 2, y + h / 2); ctx.scale(Math.max(.04, sx), 1);
+  ctx.fillStyle = face ? (c.done ? "#d8ffd8" : "#fff") : "#3a5aa8"; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, 12); ctx.fill();
+  if (face) { ctx.save(); ctx.scale(w / 46, w / 46); heroTop(ctx, HEROES[c.id], { x: 0, y: 1 }, 0, time); ctx.restore(); }
+  else { ctx.fillStyle = "rgba(255,255,255,.35)"; ctx.font = Math.floor(w * .45) + "px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("★", 0, 0); ctx.textBaseline = "alphabetic";
+    ctx.strokeStyle = "rgba(255,255,255,.4)"; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect(-w / 2 + 6, -h / 2 + 6, w - 12, h - 12, 8); ctx.stroke(); }
+  ctx.restore();
+  if (sel) { ctx.strokeStyle = HEROES[hero].ship.color; ctx.lineWidth = 5; ctx.beginPath(); ctx.roundRect(x - 5, y - 5, w + 10, h + 10, 15); ctx.stroke(); }
+}
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#1e3a5f"); g.addColorStop(1, "#3a1e5f"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  if (state === "title") {
+    Kit.text(ctx, "MEMORY DES HÉROS", W / 2, 130, 52, "#ffd23f");
+    Kit.text(ctx, "Retourne les cartes et trouve les paires !", W / 2, 180, 22);
+    Kit.text(ctx, "← ↑ ↓ → : déplacer le curseur   •   ESPACE : retourner une carte   •   M : musique", W / 2, 230, 15, "#cfe");
+    Kit.text(ctx, "10 niveaux de plus en plus grands. Enchaîne les paires pour gagner plus de points !", W / 2, 255, 15, "#cfe");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 330, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 400); ctx.scale(2.6, 2.6); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 6), time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 510, 26);
+    if (best) Kit.text(ctx, "Record : " + best, W / 2, 553, 18, "#bde");
+    return;
+  }
+  const gm = geom();
+  cards.forEach((c, i) => drawCard(c, gm.x0 + (i % cols) * (gm.cw + 12), gm.y0 + Math.floor(i / cols) * (gm.ch + 12), gm.cw, gm.ch, i === cur && state === "play"));
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 5, 5); } ctx.globalAlpha = 1;
+  Kit.text(ctx, "Score " + score, 14, 34, 24, "#ffd23f", "left"); Kit.text(ctx, "Niveau " + level + "/" + TOTAL, W / 2, 34, 22);
+  Kit.text(ctx, "Coups " + moves + "  •  " + Math.floor(lvlTime) + " s", W - 14, 34, 18, "#fff", "right");
+  if (streak > 1) Kit.text(ctx, "Série x" + streak + " !", W / 2, 75, 22, "#6ee06e");
+  if (banner > 0 && state === "play") Kit.text(ctx, "Niveau " + level + " : " + cards.length / 2 + " paires", W / 2, 70, 26, "#fff");
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "BRAVO, CHAMPION !", W / 2, 240, 56, "#ffd23f"); Kit.text(ctx, "Tu as tout retrouvé ! Score : " + score + (score >= best ? "  (record !)" : ""), W / 2, 305, 24); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 395, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "memory", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (state === "title" || state === "win") { if (e.code === "Space") newGame(); return; }
+    if (state !== "play" || Kit.paused) return;
+    let x = cur % cols, y = Math.floor(cur / cols);
+    if (e.code === "ArrowLeft") x = (x + cols - 1) % cols; else if (e.code === "ArrowRight") x = (x + 1) % cols;
+    else if (e.code === "ArrowUp") y = (y + rows - 1) % rows; else if (e.code === "ArrowDown") y = (y + 1) % rows;
+    else if (e.code === "Space") { pick(); return; } else return;
+    cur = y * cols + x;
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

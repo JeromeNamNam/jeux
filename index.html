@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Salle de jeux de Diego</title>
+<style>
+  :root{--bg:#10112a;--card:rgba(24,16,70,.74);--card2:rgba(58,40,130,.9);--txt:#f4f6ff;--mut:#d6d9ff;--gold:#ffd23f;--acc:#6df0b0}
+  *{box-sizing:border-box}
+  @keyframes bgmove{0%{background-position:0 50%}50%{background-position:100% 50%}100%{background-position:0 50%}}
+  @keyframes rise{from{transform:translateY(0) rotate(0);opacity:0}10%{opacity:.7}90%{opacity:.7}to{transform:translateY(-115vh) rotate(360deg);opacity:0}}
+  #float{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
+  #float span{position:absolute;bottom:-60px;animation:rise linear infinite}
+  main{position:relative;z-index:1;max-width:1000px;margin:0 auto}
+  @media (prefers-reduced-motion:reduce){body,#float span{animation:none}}
+  body{margin:0;min-height:100vh;background:linear-gradient(135deg,#1b0b52,#5b1a9a,#e0407a,#ff9a3c,#2b8cff,#1b0b52) 0 0/400% 400%;animation:bgmove 24s ease infinite;color:var(--txt);font-family:"Trebuchet MS",Verdana,sans-serif;padding-block:24px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+  h1{text-align:center;font-size:clamp(28px,6vw,48px);margin:8px 0 4px;color:var(--gold);text-shadow:0 3px 0 #0006}
+  .sub{text-align:center;color:var(--mut);margin:0 0 20px}
+  h2{font-size:20px;margin:26px 0 12px}
+  .heroes,.games{display:grid;gap:14px}
+  .heroes{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .games{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+  button.hero,a.game{font:inherit;color:inherit;text-align:center;background:var(--card);border:3px solid transparent;border-radius:16px;padding:14px 10px;cursor:pointer;text-decoration:none;transition:transform .12s,border-color .12s,background .12s}
+  button.hero:hover,a.game:hover{transform:translateY(-3px);background:var(--card2)}
+  button.hero[aria-pressed=true]{border-color:var(--gold);background:var(--card2);box-shadow:0 0 22px #ffd23f44}
+  .face{font-size:44px;line-height:1.1}
+  .name{font-weight:bold;font-size:16px;margin:6px 0 2px}
+  .small{color:var(--mut);font-size:13px;line-height:1.4}
+  a.game .emoji{font-size:54px}
+  a.game .play{display:inline-block;margin-top:12px;background:var(--acc);color:#0b2a1c;font-weight:bold;border-radius:999px;padding:8px 22px}
+  a.game:focus-visible,button.hero:focus-visible,.chip:focus-visible,input:focus-visible{outline:3px solid #fff;outline-offset:2px}
+  .key{display:inline-block;background:#0006;border-radius:6px;padding:1px 8px;font-size:12px;color:var(--mut);margin-bottom:4px}
+  .tag{display:inline-block;background:#0006;border-radius:999px;padding:1px 10px;font-size:11px;color:var(--gold);margin-bottom:4px}
+  canvas.demo,.demo-slot{display:block;width:100%;aspect-ratio:16/9;margin:12px 0 0;border-radius:10px;background:#000;box-shadow:0 2px 10px #0008}
+  .tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+  .chip{font:inherit;color:var(--txt);background:var(--card);border:2px solid transparent;border-radius:999px;padding:6px 14px;cursor:pointer}
+  .chip[aria-pressed=true]{border-color:var(--gold);background:var(--card2);color:var(--gold)}
+  input#q{font:inherit;color:var(--txt);background:var(--card);border:2px solid #fff3;border-radius:999px;padding:8px 16px;min-width:200px;flex:1}
+  input#q::placeholder{color:var(--mut)}
+  .count{color:var(--mut);margin:0 0 10px}
+  footer{margin-top:30px;text-align:center;color:var(--mut);font-size:13px}
+</style>
+</head>
+<body>
+<div id="float" aria-hidden="true"></div>
+<main>
+  <h1>🎮 La salle de jeux de Diego</h1>
+  <p class="sub">Choisis ton personnage, puis ton jeu !</p>
+
+  <h2>1. Mon personnage</h2>
+  <div class="heroes" id="heroes"></div>
+
+  <h2>2. Mon jeu</h2>
+  <div class="tools"><input id="q" type="search" placeholder="🔎 Cherche un jeu (skate, quiz, foot…)" aria-label="Chercher un jeu"><div id="chips" style="display:flex;flex-wrap:wrap;gap:8px"></div></div>
+  <p class="count" id="count"></p>
+  <div class="games" id="games"></div>
+
+  <footer>Astuce : dans un jeu, appuie sur <b>Échap</b> pour revenir ici. &nbsp;•&nbsp; Au clavier : ← → pour le personnage.</footer>
+</main>
+<script src="heroes.js"></script>
+<script src="demos.js"></script>
+<script src="arcade-demos.js"></script>
+<script src="games.js"></script>
+<script src="catalog.js"></script>
+<script>
+"use strict";
+const ALL = Catalog.all();
+registerArcadeDemos(GAMES);
+
+let hero = heroIndexFromUrl(), cat = "Tous", query = "";
+const hb = document.getElementById("heroes"), gb = document.getElementById("games"), chips = document.getElementById("chips"), qi = document.getElementById("q"), count = document.getElementById("count");
+const norm = s => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+function renderHeroes() {
+  hb.innerHTML = "";
+  HEROES.forEach((h, i) => {
+    const b = document.createElement("button"); b.className = "hero"; b.setAttribute("aria-pressed", i === hero);
+    b.innerHTML = `<div class="face">${h.emoji}</div><div class="name">${h.name}</div>`;
+    b.onclick = () => { hero = i; try { sessionStorage.setItem("hero", i); } catch (e) {} renderHeroes(); updateLinks(); };
+    hb.appendChild(b);
+  });
+}
+function updateLinks() { for (const a of gb.children) { a.href = a._g.href(hero); const b = a.querySelector("b"); if (b) b.textContent = a._g.as(HEROES[hero]); } }
+
+const io = new IntersectionObserver(es => { for (const e of es) {
+  const a = e.target, slot = a.querySelector(".demo-slot");
+  if (e.isIntersecting) { if (!a._cv && slot) { const c = document.createElement("canvas"); c.className = "demo"; c.setAttribute("aria-label", "Mini-vidéo : comment jouer"); slot.replaceWith(c); a._cv = c; startDemo(c, a._g.id, () => hero); } }
+  else if (a._cv) { const s = document.createElement("div"); s.className = "demo-slot"; a._cv.replaceWith(s); a._cv = null; }
+} }, { rootMargin: "200px" });
+
+function renderGames() {
+  io.disconnect(); gb.innerHTML = "";
+  const q = norm(query), list = ALL.filter(g => (cat === "Tous" || g.cat === cat) && (!q || norm(g.name + " " + g.desc + " " + g.cat).includes(q)));
+  count.textContent = list.length + " jeu" + (list.length > 1 ? "x" : "") + (cat !== "Tous" || q ? " trouvé" + (list.length > 1 ? "s" : "") : " à essayer, chacun avec ses niveaux");
+  list.forEach((g, i) => {
+    const a = document.createElement("a"); a.className = "game"; a._g = g; a.href = g.href(hero);
+    a.innerHTML = `<div class="tag">${g.cat}</div>${i < 9 && cat === "Tous" && !q ? `<div class="key">touche ${i + 1}</div>` : ""}<div class="emoji">${g.emoji}</div><div class="name">${g.name}</div><div class="small">${g.desc}</div><div class="small" style="margin-top:6px">Avec : <b>${g.as(HEROES[hero])}</b></div><div class="demo-slot"></div><span class="play">Jouer ▶</span>`;
+    gb.appendChild(a); io.observe(a);
+  });
+}
+function renderChips() {
+  const cats = ["Tous", ...[...new Set(ALL.map(g => g.cat))].sort((a, b) => (a === "Sport" ? -1 : b === "Sport" ? 1 : a.localeCompare(b)))];
+  chips.innerHTML = ""; cats.forEach(c => { const b = document.createElement("button"); b.className = "chip"; b.setAttribute("aria-pressed", c === cat); b.textContent = c + (c === "Tous" ? "" : " (" + ALL.filter(g => g.cat === c).length + ")"); b.onclick = () => { cat = c; renderChips(); renderGames(); }; chips.appendChild(b); });
+}
+qi.addEventListener("input", () => { query = qi.value; renderGames(); });
+renderHeroes(); renderChips(); renderGames();
+(() => { const f = document.getElementById("float"), icons = ["⭐", "🌙", "🚀", "🛹", "🐍", "👾", "⚽", "🪙", "✨", "🎈", "🏀", "🛴"];
+  for (let i = 0; i < 22; i++) { const e = document.createElement("span"); e.textContent = icons[i % icons.length];
+    e.style.left = Math.random() * 100 + "%"; e.style.fontSize = 18 + Math.random() * 30 + "px";
+    e.style.animationDuration = 14 + Math.random() * 18 + "s"; e.style.animationDelay = -Math.random() * 30 + "s"; f.appendChild(e); } })();
+addEventListener("keydown", e => {
+  if (document.activeElement === qi) return;
+  const n = HEROES.length;
+  if (e.code === "ArrowRight") { hero = (hero + 1) % n; renderHeroes(); updateLinks(); }
+  else if (e.code === "ArrowLeft") { hero = (hero + n - 1) % n; renderHeroes(); updateLinks(); }
+  else if (/^Digit[1-9]$/.test(e.code) && cat === "Tous" && !query) location.href = ALL[+e.code.slice(5) - 1].href(hero);
+});
+</script>
+</body>
+</html>

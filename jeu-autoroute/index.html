@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Autoroute Turbo</title>
+<style>
+  html,body{margin:0;height:100%;background:#0d1a10;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, LANES = 5, LW = 78, RX = (W - LANES * LW) / 2, PY = 470, TOTAL = 10, LEVEL_M = 600;
+const CARCOL = ["#4aa3ff", "#ffd23f", "#b07dff", "#ff9a3c", "#4af0a0", "#ff7ab8", "#cfd6e4"];
+let hero = heroIndexFromUrl(), state = "title", time = 0, level = 1, score = 0, lives = 3, best = 0, overT = 0, banner = 0, dist = 0, speed = 300, energy = 1, spawnT = 0, scroll = 0, shown = 1;
+let P = { lane: 2, x: 0, inv: 0 }, cars = [], coins = [], parts = [], floats = [];
+try { best = +localStorage.getItem("autoroute-best") || 0; } catch (e) {}
+const lx = l => RX + l * LW + LW / 2, meters = () => Math.floor(dist / 10);
+
+function newGame() { score = 0; lives = 3; dist = 0; speed = 300; energy = 1; level = 1; shown = 1; cars = []; coins = []; parts = []; floats = []; P = { lane: 2, x: lx(2), inv: 1.5 }; spawnT = 1; banner = 1.6; state = "play"; }
+function save() { if (score > best) { best = score; try { localStorage.setItem("autoroute-best", best); } catch (e) {} } }
+function boom(x, y, c, n) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.3, s = 40 + Math.random() * 200; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .5, c }); } }
+function spawn() {
+  const lane = Math.floor(Math.random() * LANES), tooClose = cars.some(c => c.lane === lane && c.y < 140); if (tooClose) return;
+  cars.push({ lane, y: -90, v: 150 + Math.random() * 120 + level * 10, col: CARCOL[Math.floor(Math.random() * CARCOL.length)], truck: Math.random() < .2 });
+  if (Math.random() < .5) { const l2 = (lane + 1 + Math.floor(Math.random() * (LANES - 1))) % LANES; for (let i = 0; i < 4; i++) coins.push({ lane: l2, y: -60 - i * 60, got: false }); }
+}
+function update(dt) {
+  time += dt; overT -= dt; banner -= dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  for (let i = floats.length - 1; i >= 0; i--) { floats[i].life -= dt; floats[i].y -= 40 * dt; if (floats[i].life <= 0) floats.splice(i, 1); }
+  if (state !== "play" || Kit.paused) return;
+  const k = Kit.keys, turbo = k.Space && energy > 0;
+  energy = Math.max(0, Math.min(1, energy + (turbo ? -.45 : .12) * dt));
+  const base = 280 + level * 40, target = base + (k.ArrowUp ? 160 : 0) - (k.ArrowDown ? 140 : 0) + (turbo ? 260 : 0);
+  speed += (target - speed) * Math.min(1, dt * 2.5); dist += speed * dt; scroll += speed * dt; if (P.inv > 0) P.inv -= dt;
+  P.x += (lx(P.lane) - P.x) * Math.min(1, dt * 14);
+  const m = meters(); level = Math.min(10, 1 + Math.floor(m / LEVEL_M)); score += Math.round(speed * dt / 10 * (turbo ? 2 : 1)) * 0;
+  if (level > shown) { shown = level; banner = 1.4; score += 100; Music.sfx("level"); }
+  if (m >= LEVEL_M * TOTAL) { score += 500; state = "win"; overT = .8; Music.sfx("win"); save(); return; }
+  spawnT -= dt; if (spawnT <= 0) { spawn(); spawnT = Math.max(.35, .95 - level * .06) * (.7 + Math.random() * .6); }
+  for (let i = cars.length - 1; i >= 0; i--) {
+    const c = cars[i]; c.y += (speed - c.v) * dt; const h = c.truck ? 120 : 80;
+    if (c.y > H + 140 || c.y < -400) { cars.splice(i, 1); continue; }
+    if (P.inv <= 0 && c.lane === P.lane && Math.abs(c.y - PY) < h / 2 + 36) {
+      lives--; P.inv = 2; speed = 200; Music.sfx("hit"); boom(P.x, PY, "#ff9a3c", 26); cars.splice(i, 1);
+      if (lives <= 0) { state = "over"; overT = .8; Music.sfx("lose"); save(); return; }
+    }
+  }
+  for (const c of coins) { c.y += speed * dt; if (!c.got && c.lane === P.lane && Math.abs(c.y - PY) < 34) { c.got = true; score += 10; Music.sfx("coin"); floats.push({ x: lx(c.lane), y: PY - 40, t: "+10", life: .7 }); } }
+  coins = coins.filter(c => c.y < H + 40 && !c.got);
+  score += 0; if (Math.floor(time * 4) !== Math.floor((time - dt) * 4)) score += Math.round(speed / 60);
+}
+function car(x, y, col, truck, player) {
+  const w = 44, h = truck ? 120 : 80; ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.fillRect(-w / 2 + 4, -h / 2 + 6, w, h);
+  ctx.fillStyle = "#222"; ctx.fillRect(-w / 2 - 4, -h / 2 + 8, 6, 16); ctx.fillRect(w / 2 - 2, -h / 2 + 8, 6, 16); ctx.fillRect(-w / 2 - 4, h / 2 - 24, 6, 16); ctx.fillRect(w / 2 - 2, h / 2 - 24, 6, 16);
+  ctx.fillStyle = col; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, 10); ctx.fill();
+  if (truck) { ctx.fillStyle = "#e8ecff"; ctx.fillRect(-w / 2 + 3, -h / 2 + 30, w - 6, h - 36); ctx.fillStyle = "#5a7aa8"; ctx.fillRect(-w / 2 + 6, -h / 2 + 8, w - 12, 14); }
+  else if (!player) { ctx.fillStyle = "#9fd8ff"; ctx.fillRect(-w / 2 + 6, -h / 2 + 18, w - 12, 18); ctx.fillStyle = "rgba(255,255,255,.2)"; ctx.fillRect(-w / 2 + 6, h / 2 - 28, w - 12, 12); }
+  if (player) { ctx.fillStyle = "#222"; ctx.beginPath(); ctx.roundRect(-w / 2 + 5, -12, w - 10, 34, 8); ctx.fill(); ctx.save(); ctx.translate(0, 4); ctx.scale(.85, .85); heroTop(ctx, HEROES[hero], { x: 0, y: -1 }, 0, time); ctx.restore(); ctx.fillStyle = "#ffe98a"; ctx.fillRect(-w / 2 + 4, -h / 2 - 2, 8, 5); ctx.fillRect(w / 2 - 12, -h / 2 - 2, 8, 5); }
+  ctx.restore();
+}
+function draw() {
+  ctx.fillStyle = "#3f8a2a"; ctx.fillRect(0, 0, W, H); ctx.fillStyle = "#4a9a34"; for (let i = 0; i < 14; i++) ctx.fillRect(0, ((i * 50 + scroll * .5) % (H + 50)) - 50, W, 25);
+  ctx.fillStyle = "#3a3a44"; ctx.fillRect(RX - 8, 0, LANES * LW + 16, H); ctx.fillStyle = "#fff"; ctx.fillRect(RX - 8, 0, 6, H); ctx.fillRect(RX + LANES * LW + 2, 0, 6, H);
+  ctx.fillStyle = "rgba(255,255,255,.65)"; for (let l = 1; l < LANES; l++) for (let i = -1; i < 14; i++) ctx.fillRect(RX + l * LW - 2, ((i * 60 + scroll) % (H + 60)) - 30 + 0, 4, 32);
+  for (let i = 0; i < 8; i++) { const y = ((i * 110 + scroll * 1.0) % (H + 110)) - 55; for (const x of [RX - 60, RX + LANES * LW + 60]) { ctx.fillStyle = "#7a4e2d"; ctx.fillRect(x - 4, y, 8, 22); ctx.fillStyle = "#2a8a3a"; ctx.beginPath(); ctx.arc(x, y - 6, 22, 0, 7); ctx.fill(); } }
+  if (state === "title") {
+    ctx.fillStyle = "rgba(10,30,15,.62)"; ctx.fillRect(0, 0, W, H);
+    Kit.text(ctx, "AUTOROUTE TURBO", W / 2, 120, 52, "#ffd23f");
+    Kit.text(ctx, "Double les voitures sans les toucher !", W / 2, 170, 22);
+    Kit.text(ctx, "← → : changer de voie   •   ↑ ↓ : accélérer / freiner   •   ESPACE : turbo   •   P : pause   •   M : musique", W / 2, 218, 14, "#cfe");
+    Kit.text(ctx, "Ramasse les pièces. Roule 6 km pour finir les 10 niveaux (un niveau = 600 m) !", W / 2, 244, 15, "#ffd23f");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 320, 22, HEROES[hero].ship.color);
+    car(W / 2, 400, HEROES[hero].ship.color, false, true);
+    Kit.text(ctx, "Appuie sur ESPACE pour démarrer", W / 2, 520, 26); if (best) Kit.text(ctx, "Record : " + best, W / 2, 558, 18, "#bde");
+    return;
+  }
+  for (const c of coins) if (!c.got) { ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.ellipse(lx(c.lane), c.y, Math.abs(Math.cos(time * 5 + c.y * .03)) * 8 + 2, 10, 0, 0, 7); ctx.fill(); ctx.strokeStyle = "#c98a00"; ctx.lineWidth = 2; ctx.stroke(); }
+  for (const c of cars) car(lx(c.lane), c.y, c.col, c.truck, false);
+  if (!(P.inv > 0 && Math.floor(time * 14) % 2)) { if (Kit.keys.Space && energy > 0) { ctx.fillStyle = "rgba(255,160,40,.7)"; ctx.beginPath(); ctx.moveTo(P.x - 12, PY + 40); ctx.lineTo(P.x, PY + 90 + Math.random() * 20); ctx.lineTo(P.x + 12, PY + 40); ctx.fill(); } car(P.x, PY, HEROES[hero].ship.color, false, true); }
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 4, 4); } ctx.globalAlpha = 1;
+  for (const f of floats) { ctx.globalAlpha = Math.min(1, f.life * 2); Kit.text(ctx, f.t, f.x, f.y, 22, "#ffd23f"); } ctx.globalAlpha = 1;
+  Kit.text(ctx, "Score " + score, 14, 34, 24, "#ffd23f", "left"); Kit.text(ctx, "Niveau " + level + "/" + TOTAL, W / 2, 34, 22); Kit.text(ctx, "♥".repeat(Math.max(0, lives)), W - 14, 34, 26, "#ff5a6e", "right");
+  Kit.text(ctx, meters() + " m", W / 2, 64, 18, "#fff"); Kit.text(ctx, Math.round(speed / 3) + " km/h", 14, 64, 18, "#fff", "left");
+  ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fillRect(14, H - 26, 120, 12); ctx.fillStyle = Kit.keys.Space && energy > 0 ? "#ffd23f" : "#4af0a0"; ctx.fillRect(14, H - 26, 120 * energy, 12); Kit.text(ctx, "TURBO (espace)", 74, H - 32, 11, "#fff");
+  ctx.fillStyle = "rgba(0,0,0,.4)"; ctx.fillRect(W - 24, 80, 10, 400); ctx.fillStyle = HEROES[hero].ship.color; ctx.fillRect(W - 24, 480 - 400 * Math.min(1, meters() / (LEVEL_M * TOTAL)), 10, 6);
+  if (banner > 0 && state === "play") Kit.text(ctx, level === 1 ? "Go !" : "Niveau " + level, W / 2, 300, 54);
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "ARRIVÉE !", W / 2, 240, 62, "#ffd23f"); Kit.text(ctx, "10 niveaux, 6 km parcourus ! Score : " + score, W / 2, 305, 26); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "ACCIDENT !", W / 2, 240, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score + "  •  " + meters() + " m  •  Niveau " + level, W / 2, 305, 26);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 345, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 405, 22, "#bde"); }
+}
+Kit.install({
+  canvas: cv, song: "run", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (state === "title" || ((state === "over" || state === "win") && overT <= 0)) { if (e.code === "Space") newGame(); return; }
+    if (state !== "play" || Kit.paused) return;
+    if (e.code === "ArrowLeft") { P.lane = Math.max(0, P.lane - 1); Music.sfx("bounce"); } else if (e.code === "ArrowRight") { P.lane = Math.min(LANES - 1, P.lane + 1); Music.sfx("bounce"); }
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serpent Géant</title>
+<style>
+  html,body{margin:0;height:100%;background:#0d1a0f;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, CS = 25, COLS = 32, ROWS = 22, TOP = 50;
+
+/* ---------------- Audio ---------------- */
+const Snd = (() => {
+  let ac = null, master, next = 0, step = 0, muted = false, noiseBuf;
+  const BPM = 132, SD = 60 / BPM / 4;
+  const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+  const bars = [
+    [[76,4],[79,4],[84,4],[79,4]],
+    [[81,4],[76,4],[72,4],[76,4]],
+    [[77,4],[81,4],[84,4],[81,4]],
+    [[83,4],[79,4],[74,4],[79,4]],
+    [[84,2],[83,2],[84,4],[79,4],[76,4]],
+    [[81,2],[79,2],[81,4],[76,4],[72,4]],
+    [[77,2],[79,2],[81,2],[84,2],[86,4],[84,4]],
+    [[83,4],[79,4],[83,4],[86,4]],
+  ];
+  const mel = new Array(128).fill(null);
+  bars.forEach((b, i) => { let s = i * 16; b.forEach(([n, l]) => { mel[s] = [n, l]; s += l; }); });
+  const roots  = [48,45,41,43,48,45,41,43];
+  const chords = [[60,64,67],[57,60,64],[53,57,60],[55,59,62],[60,64,67],[57,60,64],[53,57,60],[55,59,62]];
+  const arp = [0,1,2,1];
+
+  function tone(type, f, t, dur, vol, filt) {
+    const o = ac.createOscillator(), g = ac.createGain(); let out = g;
+    o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g);
+    if (filt) { const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = filt; g.connect(lp); out = lp; }
+    out.connect(master); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function noise(t, dur, vol, hp, type) {
+    const s = ac.createBufferSource(), g = ac.createGain(), f = ac.createBiquadFilter();
+    s.buffer = noiseBuf; f.type = type || "highpass"; f.frequency.value = hp;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + dur + 0.02);
+  }
+  function kick(t) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.12);
+    g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.2);
+  }
+  function playStep(s, t) {
+    const bar = s >> 4, i = s & 15, m = mel[s];
+    if (m) tone("square", mtof(m[0]), t, m[1] * SD * 0.9, 0.04, 3000);
+    if (i % 4 === 0) tone("triangle", mtof(roots[bar]), t, SD * 3, 0.3);
+    if (i % 4 === 2) tone("triangle", mtof(roots[bar] + 12), t, SD * 1.5, 0.16);
+    tone("triangle", mtof(chords[bar][arp[i & 3]] + 12), t, SD * 0.9, 0.05);
+    if (i === 0 || i === 8) kick(t);
+    if (i === 4 || i === 12) noise(t, 0.1, 0.09, 2000);
+    if (i % 2) noise(t, 0.03, 0.025, 7000);
+  }
+  function schedule() { while (next < ac.currentTime + 0.2) { playStep(step, next); next += SD; step = (step + 1) % 128; } }
+  return {
+    init() {
+      if (ac) { if (ac.state === "suspended") ac.resume(); return; }
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      master = ac.createGain(); master.gain.value = muted ? 0 : 0.5; master.connect(ac.destination);
+      noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      next = ac.currentTime + 0.1; setInterval(schedule, 25);
+    },
+    toggleMute() { muted = !muted; if (master) master.gain.value = muted ? 0 : 0.5; },
+    get muted() { return muted; },
+    sfx(k) {
+      if (!ac) return; const t = ac.currentTime;
+      if (k === "eat") { tone("square", mtof(84), t, 0.06, 0.07); tone("square", mtof(91), t + 0.05, 0.1, 0.07); }
+      else if (k === "gold") { [84, 88, 91, 96].forEach((n, j) => tone("square", mtof(n), t + j * 0.05, 0.12, 0.07)); }
+      else if (k === "star") { [72, 79, 84, 91, 96].forEach((n, j) => tone("triangle", mtof(n), t + j * 0.05, 0.18, 0.12)); }
+      else if (k === "die") { const o = ac.createOscillator(), g = ac.createGain(); o.type = "sawtooth";
+        o.frequency.setValueAtTime(400, t); o.frequency.exponentialRampToValueAtTime(50, t + 0.6);
+        g.gain.setValueAtTime(0.15, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+        o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.65); noise(t, 0.3, 0.15, 500, "lowpass"); }
+      else if (k === "level") { [72, 76, 79, 84, 88].forEach((n, j) => tone("square", mtof(n), t + j * 0.09, 0.2, 0.07)); }
+    }
+  };
+})();
+
+/* ---------------- État ---------------- */
+const SKINS = HEROES.map(h => ({ name: h.snake.name }));
+const keys = {};
+let state = "title", skin = heroIndexFromUrl(), time = 0, paused = false;
+let snake, from, dir, dirQ, grow, acc, lives, score, level, eaten, energy, inv, rocks, apple, gold, star, goldT, starT, nextGold, banner, deadT, best = 0, shake = 0;
+const parts = [];
+try { best = +localStorage.getItem("serpent-best") || 0; } catch (e) {}
+const rnd = n => Math.floor(Math.random() * n);
+
+function resetSnake() {
+  const cx = COLS >> 1, cy = ROWS >> 1;
+  snake = [3, 2, 1, 0].map(k => ({ x: cx + k - 3 + 3, y: cy })); snake.reverse();   // tête à droite
+  snake = [{ x: cx, y: cy }, { x: cx - 1, y: cy }, { x: cx - 2, y: cy }, { x: cx - 3, y: cy }];
+  from = snake.map(s => ({ ...s })); dir = { x: 1, y: 0 }; dirQ = []; grow = 0; acc = 0; inv = 2;
+  rocks = rocks.filter(r => Math.abs(r.x - cx) > 6 || Math.abs(r.y - cy) > 4);
+}
+function newGame() {
+  rocks = []; lives = 3; score = 0; level = 1; eaten = 0; energy = 1; gold = star = null; nextGold = 10; banner = 1.8;
+  resetSnake(); apple = null; spawnApple(); state = "play";
+}
+const free = (x, y) => !snake.some(s => s.x === x && s.y === y) && !rocks.some(r => r.x === x && r.y === y) &&
+  !(apple && apple.x === x && apple.y === y) && !(gold && gold.x === x && gold.y === y) && !(star && star.x === x && star.y === y);
+function randFree(minDist) {
+  for (let i = 0; i < 300; i++) {
+    const x = rnd(COLS), y = rnd(ROWS);
+    if (free(x, y) && (!minDist || Math.abs(x - snake[0].x) + Math.abs(y - snake[0].y) > minDist)) return { x, y };
+  }
+  return null;
+}
+function spawnApple() { apple = randFree(); }
+function burst(x, y, c, n) {
+  for (let i = 0; i < n; i++) { const a = Math.random() * 6.3, s = 40 + Math.random() * 160;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .4 + Math.random() * .4, c }); }
+}
+const px = x => x * CS + CS / 2, py = y => TOP + y * CS + CS / 2;
+
+function die() {
+  lives--; Snd.sfx("die"); shake = .4;
+  snake.forEach(s => burst(px(s.x), py(s.y), "#7dff7d", 2));
+  if (lives <= 0) {
+    state = "over"; deadT = .8;
+    if (score > best) { best = score; try { localStorage.setItem("serpent-best", best); } catch (e) {} }
+  } else resetSnake();
+}
+
+function tick() {
+  from = snake.map(s => ({ ...s }));
+  if (dirQ.length) dir = dirQ.shift();
+  const nx = (snake[0].x + dir.x + COLS) % COLS, ny = (snake[0].y + dir.y + ROWS) % ROWS;
+  const tailFree = grow <= 0 ? 1 : 0;
+  if (inv <= 0 || false) {
+    if (rocks.some(r => r.x === nx && r.y === ny)) { die(); return; }
+    if (snake.some((s, i) => s.x === nx && s.y === ny && !(tailFree && i === snake.length - 1))) { die(); return; }
+  }
+  snake.unshift({ x: nx, y: ny });
+  if (grow > 0) grow--; else snake.pop();
+  if (apple && apple.x === nx && apple.y === ny) {
+    grow += 1; score += 10 * level; eaten++; Snd.sfx("eat"); burst(px(nx), py(ny), "#ff4d4d", 10); spawnApple();
+    if (--nextGold <= 0 && !gold) { gold = randFree(); goldT = 7; nextGold = 8 + rnd(5); }
+    if (!star && Math.random() < .12) { star = randFree(); starT = 9; }
+    if (eaten % 6 === 0) {                                    // niveau suivant
+      if (level >= 10) { state = "win"; deadT = .8; score += 500; Snd.sfx("level"); if (score > best) { best = score; try { localStorage.setItem("serpent-best", best); } catch (e) {} } return; }
+      level++; banner = 1.8; score += 100; Snd.sfx("level");
+      for (let i = 0; i < 3 + level; i++) { const c = randFree(5); if (c) rocks.push(c); }
+    }
+  }
+  if (gold && gold.x === nx && gold.y === ny) { grow += 3; score += 50; Snd.sfx("gold"); burst(px(nx), py(ny), "#ffd23f", 18); gold = null; }
+  if (star && star.x === nx && star.y === ny) { inv = 7; score += 25; Snd.sfx("star"); burst(px(nx), py(ny), "#fff", 18); star = null; }
+}
+
+function update(dt) {
+  time += dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  shake = Math.max(0, shake - dt);
+  if (state === "over" || state === "win") deadT -= dt;
+  if (state !== "play" || paused) return;
+  if (banner > 0) banner -= dt;
+  if (inv > 0) inv -= dt;
+  if (gold && (goldT -= dt) <= 0) gold = null;
+  if (star && (starT -= dt) <= 0) star = null;
+  const turbo = keys.Space && energy > 0;
+  energy = Math.max(0, Math.min(1, energy + (turbo ? -.7 : .25) * dt));
+  const interval = Math.max(.06, .15 - level * .008) * (turbo ? .5 : 1);
+  acc += dt;
+  while (acc >= interval && state === "play") { acc -= interval; tick(); }
+}
+
+/* ---------------- Rendu ---------------- */
+function text(t, x, y, size, color, align) {
+  ctx.font = `bold ${size}px "Trebuchet MS",Verdana,sans-serif`; ctx.textAlign = align || "center";
+  ctx.lineWidth = 5; ctx.strokeStyle = "rgba(0,0,0,.7)"; ctx.lineJoin = "round"; ctx.strokeText(t, x, y); ctx.fillStyle = color || "#fff"; ctx.fillText(t, x, y);
+}
+function segColor(i, n) {
+  if (inv > 0 && Math.floor(time * 12) % 2) return "hsl(" + (time * 400 + i * 20) % 360 + ",90%,65%)";
+  const sk = HEROES[skin].snake;
+  if (sk.rainbow) return "hsl(" + ((i * 28 + time * 60) % 360) + ",80%,58%)";
+  return i % 2 ? sk.b : sk.a;
+}
+function drawSnake() {
+  const a = Math.min(1, acc / Math.max(.001, Math.max(.06, .15 - level * .008) * (keys.Space && energy > 0 ? .5 : 1)));
+  const n = snake.length, pos = snake.map((s, i) => {
+    const f = from[i] || from[from.length - 1];
+    if (Math.abs(f.x - s.x) > 1 || Math.abs(f.y - s.y) > 1) return { x: px(s.x), y: py(s.y) };
+    return { x: px(f.x + (s.x - f.x) * a), y: py(f.y + (s.y - f.y) * a) };
+  });
+  if (inv > 0 && inv < 2 && Math.floor(time * 14) % 2 && state === "play") ctx.globalAlpha = .5;
+  for (let i = n - 1; i >= 0; i--) {
+    const r = CS * (.5 - .12 * (i / n)) + (i === 0 ? 2 : 0);
+    ctx.fillStyle = segColor(i, n); ctx.beginPath(); ctx.arc(pos[i].x, pos[i].y, r, 0, 7); ctx.fill();
+    if (HEROES[skin].snake.spikes && i % 3 === 1 && i > 0) { ctx.fillStyle = "#ffb03a"; ctx.beginPath(); ctx.moveTo(pos[i].x - 4, pos[i].y - r + 2); ctx.lineTo(pos[i].x, pos[i].y - r - 6); ctx.lineTo(pos[i].x + 4, pos[i].y - r + 2); ctx.fill(); }
+    if (HEROES[skin].snake.dots && i > 0 && i % 2 === 0) { ctx.fillStyle = "rgba(255,255,255,.18)"; ctx.beginPath(); ctx.arc(pos[i].x, pos[i].y, r * .45, 0, 7); ctx.fill(); }
+  }
+  const h = pos[0], d = dir, perp = { x: -d.y, y: d.x };
+  if (Math.floor(time * 3) % 3 === 0) { ctx.strokeStyle = "#ff3d5a"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(h.x + d.x * 12, h.y + d.y * 12);
+    ctx.lineTo(h.x + d.x * 20, h.y + d.y * 20); ctx.moveTo(h.x + d.x * 20, h.y + d.y * 20); ctx.lineTo(h.x + d.x * 24 + perp.x * 3, h.y + d.y * 24 + perp.y * 3); ctx.moveTo(h.x + d.x * 20, h.y + d.y * 20); ctx.lineTo(h.x + d.x * 24 - perp.x * 3, h.y + d.y * 24 - perp.y * 3); ctx.stroke(); }
+  for (const s of [-1, 1]) {
+    const ex = h.x + d.x * 4 + perp.x * 6 * s, ey = h.y + d.y * 4 + perp.y * 6 * s;
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(ex, ey, 4.5, 0, 7); ctx.fill();
+    ctx.fillStyle = "#111"; ctx.beginPath(); ctx.arc(ex + d.x * 1.5, ey + d.y * 1.5, 2.2, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawFood() {
+  const b = Math.sin(time * 6) * 1.5;
+  if (apple) { const x = px(apple.x), y = py(apple.y) + b * .5;
+    ctx.fillStyle = "#e8283a"; ctx.beginPath(); ctx.arc(x - 3, y + 1, 8, 0, 7); ctx.arc(x + 3, y + 1, 8, 0, 7); ctx.fill();
+    ctx.fillStyle = "#fff5"; ctx.beginPath(); ctx.arc(x - 5, y - 2, 3, 0, 7); ctx.fill();
+    ctx.strokeStyle = "#5a3a1a"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x + 2, y - 11); ctx.stroke();
+    ctx.fillStyle = "#4fc24a"; ctx.beginPath(); ctx.ellipse(x + 6, y - 9, 5, 2.5, -.5, 0, 7); ctx.fill(); }
+  if (gold) { const x = px(gold.x), y = py(gold.y) + b; ctx.globalAlpha = goldT < 2 ? (Math.floor(time * 10) % 2 ? .3 : 1) : 1;
+    ctx.fillStyle = "#ffd23f"; ctx.shadowColor = "#ffd23f"; ctx.shadowBlur = 14; ctx.beginPath(); ctx.arc(x - 3, y + 1, 9, 0, 7); ctx.arc(x + 3, y + 1, 9, 0, 7); ctx.fill();
+    ctx.shadowBlur = 0; ctx.fillStyle = "#fff8"; ctx.beginPath(); ctx.arc(x - 5, y - 2, 3, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
+  if (star) { const x = px(star.x), y = py(star.y) + b; ctx.globalAlpha = starT < 2 ? (Math.floor(time * 10) % 2 ? .3 : 1) : 1;
+    ctx.fillStyle = "#7df0ff"; ctx.shadowColor = "#7df0ff"; ctx.shadowBlur = 14; ctx.beginPath();
+    for (let k = 0; k < 10; k++) { const r = k % 2 ? 5 : 12, an = k * Math.PI / 5 - Math.PI / 2 + time * 2; ctx.lineTo(x + Math.cos(an) * r, y + Math.sin(an) * r); }
+    ctx.fill(); ctx.shadowBlur = 0; ctx.globalAlpha = 1; }
+  for (const r of rocks) { const x = r.x * CS, y = TOP + r.y * CS;
+    ctx.fillStyle = "#6c7280"; ctx.beginPath(); ctx.roundRect(x + 1, y + 1, CS - 2, CS - 2, 7); ctx.fill();
+    ctx.fillStyle = "#8a91a0"; ctx.beginPath(); ctx.roundRect(x + 4, y + 3, CS - 12, 8, 4); ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,.25)"; ctx.fillRect(x + 6, y + CS - 8, CS - 10, 4); }
+}
+function draw() {
+  ctx.fillStyle = "#0d1a0f"; ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - .5) * shake * 20, (Math.random() - .5) * shake * 20);
+  for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) { ctx.fillStyle = (x + y) % 2 ? "#2f7a3a" : "#37853f"; ctx.fillRect(x * CS, TOP + y * CS, CS, CS); }
+  if (state !== "title") { drawFood(); drawSnake(); }
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 4, 4); } ctx.globalAlpha = 1;
+  ctx.restore();
+  ctx.fillStyle = "#16301a"; ctx.fillRect(0, 0, W, TOP);
+  if (state === "title") {
+    ctx.fillStyle = "rgba(8,20,10,.72)"; ctx.fillRect(0, 0, W, H);
+    text("SERPENT GÉANT", W / 2, 150, 56, "#7dff7d");
+    text("Mange des pommes, deviens énorme !", W / 2, 195, 22);
+    text("← ↑ ↓ → : tourner   •   ESPACE (maintenu) : turbo   •   P : pause   •   M : musique", W / 2, 250, 15, "#cfe");
+    text("Les bords sont des tunnels. Évite les rochers et ta propre queue.", W / 2, 275, 15, "#cfe");
+    text("🍎 +10   🟡 pomme dorée (+50, grandit de 3)   ⭐ invincible 7 s", W / 2, 305, 16, "#ffd23f");
+    text("◀  " + SKINS[skin].name + "  ▶   (Tab ou clic gauche/droite)", W / 2, 370, 22, "#ffd23f");
+    inv = 0;
+    for (let i = 6; i >= 0; i--) { const x = W / 2 + 60 - i * 22, y = 430 + Math.sin(time * 4 + i * .7) * 10;
+      ctx.fillStyle = segColor(i, 7); ctx.beginPath(); ctx.arc(x, y, 12 - i * .5 + (i === 0 ? 2 : 0), 0, 7); ctx.fill();
+      if (i === 0) { ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x + 4, y - 5, 4, 0, 7); ctx.arc(x + 4, y + 5, 4, 0, 7); ctx.fill(); ctx.fillStyle = "#111"; ctx.beginPath(); ctx.arc(x + 5.5, y - 5, 2, 0, 7); ctx.arc(x + 5.5, y + 5, 2, 0, 7); ctx.fill(); } }
+    text("Appuie sur ESPACE pour jouer", W / 2, 520, 26, "#fff");
+    if (best) text("Record : " + best, W / 2, 560, 18, "#bde");
+  } else {
+    text("Score " + score, 14, 33, 22, "#ffd23f", "left");
+    text("Niveau " + level + "/10  •  Longueur " + snake.length, W / 2 - 40, 33, 18, "#fff");
+    text("♥".repeat(Math.max(0, lives)), W - 14, 33, 24, "#ff5a6e", "right");
+    ctx.fillStyle = "#0008"; ctx.fillRect(W / 2 + 140, 20, 100, 12);
+    ctx.fillStyle = keys.Space && energy > 0 ? "#ffd23f" : "#4af0a0"; ctx.fillRect(W / 2 + 140, 20, 100 * energy, 12);
+    text("TURBO", W / 2 + 190, 46, 10, "#cfe");
+    if (inv > 2 || (inv > 0 && state === "play" && lives > 0 && false)) text("⭐ " + Math.ceil(inv) + "s", 150, 33, 18, "#7df0ff", "left");
+    text(Snd.muted ? "🔇 M" : "🔊 M", W - 12, H - 8, 12, "#cfe", "right");
+    if (banner > 0 && state === "play") text(level === 1 ? "C'est parti !" : "Niveau " + level + " !", W / 2, 300, 54, "#fff");
+    if (paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); text("PAUSE", W / 2, H / 2, 60, "#fff"); }
+    if (state === "win") {
+      ctx.fillStyle = "rgba(5,12,6,.7)"; ctx.fillRect(0, 0, W, H);
+      text("BRAVO ! 10 NIVEAUX !", W / 2, 240, 54, "#ffd23f"); text("Serpent géant de " + snake.length + " segments ! Score : " + score, W / 2, 300, 22); text("ESPACE pour rejouer", W / 2, 400, 22, "#bde");
+    }
+    if (state === "over") {
+      ctx.fillStyle = "rgba(5,12,6,.7)"; ctx.fillRect(0, 0, W, H);
+      text("GAME OVER", W / 2, 240, 64, "#ff5a6e");
+      text("Score : " + score + "  •  Longueur max : " + snake.length + "  •  Niveau " + level, W / 2, 300, 22);
+      if (score >= best && score > 0) text("Nouveau record !", W / 2, 340, 24, "#ffd23f");
+      text("ESPACE pour rejouer", W / 2, 400, 22, "#bde");
+    }
+  }
+}
+
+/* ---------------- Entrées & boucle ---------------- */
+function cycleSkin(f) { skin = (skin + (f ? 1 : SKINS.length - 1)) % SKINS.length; }
+const DIRS = { ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 } };
+addEventListener("keydown", e => {
+  if (e.code === "Escape") { location.href = "../index.html?hero=" + skin; return; }
+  if (/^(Arrow(Up|Down|Left|Right)|Space|Tab)$/.test(e.code)) e.preventDefault();
+  Snd.init();
+  if (e.code === "KeyM") { Snd.toggleMute(); return; }
+  if (e.code === "KeyP" && state === "play") { paused = !paused; return; }
+  if (state === "title") {
+    if (DIRS[e.code] || e.code === "Tab") { cycleSkin(e.code === "ArrowDown" || e.code === "ArrowRight" || e.code === "Tab"); return; }
+    if (e.code === "Space") { newGame(); return; }
+  }
+  if (state === "over" || state === "win") { if (e.code === "Space" && deadT <= 0) newGame(); return; }
+  if (state === "play" && DIRS[e.code] && !paused) {
+    const last = dirQ.length ? dirQ[dirQ.length - 1] : dir, d = DIRS[e.code];
+    if (!(d.x === -last.x && d.y === -last.y) && !(d.x === last.x && d.y === last.y) && dirQ.length < 2) dirQ.push(d);
+  }
+  keys[e.code] = true;
+});
+addEventListener("keyup", e => { keys[e.code] = false; });
+addEventListener("blur", () => { for (const k in keys) keys[k] = false; if (state === "play") paused = true; });
+cv.addEventListener("click", e => { if (state !== "title") return; const r = cv.getBoundingClientRect(); cycleSkin(e.clientX > r.left + r.width / 2); });
+
+let last = performance.now();
+function frame(now) { const dt = Math.min(.05, (now - last) / 1000); last = now; update(dt); draw(); requestAnimationFrame(frame); }
+requestAnimationFrame(frame);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

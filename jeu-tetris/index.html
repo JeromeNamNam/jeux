@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Blocs Magiques</title>
+<style>
+  html,body{margin:0;height:100%;background:#0e1022;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, COLS = 10, ROWS = 20, S = 28, BX = 260, BY = 20;
+const SHAPES = {
+  I: [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]], O: [[1,1],[1,1]], T: [[0,1,0],[1,1,1],[0,0,0]],
+  S: [[0,1,1],[1,1,0],[0,0,0]], Z: [[1,1,0],[0,1,1],[0,0,0]], J: [[1,0,0],[1,1,1],[0,0,0]], L: [[0,0,1],[1,1,1],[0,0,0]],
+};
+const COLORS = { I: "#4af0ff", O: "#ffd23f", T: "#b07dff", S: "#4af07a", Z: "#ff5a6e", J: "#4aa3ff", L: "#ff9a3c" };
+let hero = heroIndexFromUrl(), state = "title", time = 0, score = 0, best = 0, lines = 0, level = 1, board, cur, next, dropT = 0, overT = 0, flash = [], flashT = 0, parts = [], bag = [];
+try { best = +localStorage.getItem("tetris-best") || 0; } catch (e) {}
+
+function rot(m) { return m[0].map((_, i) => m.map(r => r[i]).reverse()); }
+function draw7() { if (!bag.length) bag = Object.keys(SHAPES).sort(() => Math.random() - .5); const k = bag.pop(); return { k, m: SHAPES[k].map(r => r.slice()), x: 0, y: 0 }; }
+function fits(p, m, x, y) { for (let r = 0; r < m.length; r++) for (let c = 0; c < m[r].length; c++) if (m[r][c]) { const bx = x + c, by = y + r; if (bx < 0 || bx >= COLS || by >= ROWS || (by >= 0 && board[by][bx])) return false; } return true; }
+function spawn() { cur = next || draw7(); next = draw7(); cur.x = Math.floor((COLS - cur.m[0].length) / 2); cur.y = cur.k === "I" ? -1 : 0; if (!fits(cur, cur.m, cur.x, cur.y)) { state = "over"; overT = .8; Music.sfx("lose"); if (score > best) { best = score; try { localStorage.setItem("tetris-best", best); } catch (e) {} } } }
+function newGame() { board = Array.from({ length: ROWS }, () => new Array(COLS).fill(0)); score = 0; lines = 0; level = 1; bag = []; next = null; dropT = 0; flash = []; state = "play"; spawn(); }
+const interval = () => Math.max(.07, .8 - (level - 1) * .07);
+function move(dx) { if (fits(cur, cur.m, cur.x + dx, cur.y)) { cur.x += dx; Music.sfx("bounce"); } }
+function rotate() { const m = rot(cur.m); for (const dx of [0, -1, 1, -2, 2]) if (fits(cur, m, cur.x + dx, cur.y)) { cur.m = m; cur.x += dx; Music.sfx("flip"); return; } }
+function lock() {
+  cur.m.forEach((row, r) => row.forEach((v, c) => { if (v && cur.y + r >= 0) board[cur.y + r][cur.x + c] = cur.k; }));
+  const full = []; board.forEach((row, r) => { if (row.every(v => v)) full.push(r); });
+  if (full.length) {
+    Music.sfx(full.length >= 4 ? "win" : "match"); flash = full; flashT = .25; score += [0, 100, 300, 500, 800][full.length] * level; lines += full.length; level = 1 + Math.floor(lines / 10);
+    full.forEach(r => { for (let c = 0; c < COLS; c++) for (let k = 0; k < 2; k++) parts.push({ x: BX + c * S + S / 2, y: BY + r * S + S / 2, vx: (Math.random() - .5) * 300, vy: -Math.random() * 250, life: .6, c: COLORS[board[r][c]] || "#fff" }); });
+  } else { Music.sfx("brick"); spawn(); }
+}
+function dropOne() { if (fits(cur, cur.m, cur.x, cur.y + 1)) { cur.y++; return true; } lock(); return false; }
+function hardDrop() { let n = 0; while (fits(cur, cur.m, cur.x, cur.y + 1)) { cur.y++; n++; } score += n * 2; lock(); }
+
+function update(dt) {
+  time += dt; overT -= dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 600 * dt; if (p.life <= 0) parts.splice(i, 1); }
+  if (state !== "play" || Kit.paused) return;
+  if (lines >= 100 && !flash.length) { state = "win"; overT = .8; Music.sfx("win"); if (score > best) { best = score; try { localStorage.setItem("tetris-best", best); } catch (e) {} } return; }
+  if (flash.length) { flashT -= dt; if (flashT <= 0) { flash.sort((a, b) => a - b).forEach(r => { board.splice(r, 1); board.unshift(new Array(COLS).fill(0)); }); flash = []; spawn(); } return; }
+  dropT += dt * (Kit.keys.ArrowDown ? 12 : 1); if (dropT >= interval()) { dropT = 0; if (Kit.keys.ArrowDown) score += 1; dropOne(); }
+}
+
+function cell(x, y, col, a) { ctx.globalAlpha = a || 1; ctx.fillStyle = col; ctx.fillRect(x + 1, y + 1, S - 2, S - 2); ctx.fillStyle = "rgba(255,255,255,.35)"; ctx.fillRect(x + 3, y + 3, S - 6, 5); ctx.fillStyle = "rgba(0,0,0,.2)"; ctx.fillRect(x + 1, y + S - 6, S - 2, 5); ctx.globalAlpha = 1; }
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, "#1a1448"); g.addColorStop(1, "#0a2a3a"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  if (state === "title") {
+    Kit.text(ctx, "BLOCS MAGIQUES", W / 2, 120, 54, "#ffd23f");
+    Kit.text(ctx, "Empile les blocs et complète des lignes !", W / 2, 170, 22);
+    Kit.text(ctx, "← → : bouger   •   ↑ : tourner   •   ↓ : descendre vite   •   ESPACE : tout en bas", W / 2, 220, 15, "#cfe");
+    Kit.text(ctx, "P : pause   •   M : musique   •   Échap : menu", W / 2, 245, 15, "#cfe");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 320, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 395); ctx.scale(2.6, 2.6); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 6), time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 510, 26); if (best) Kit.text(ctx, "Record : " + best, W / 2, 553, 18, "#bde");
+    return;
+  }
+  ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(BX - 6, BY - 6, COLS * S + 12, ROWS * S + 12); ctx.strokeStyle = HEROES[hero].ship.color; ctx.lineWidth = 3; ctx.strokeRect(BX - 6, BY - 6, COLS * S + 12, ROWS * S + 12);
+  ctx.strokeStyle = "rgba(255,255,255,.06)"; ctx.lineWidth = 1; for (let c = 1; c < COLS; c++) { ctx.beginPath(); ctx.moveTo(BX + c * S, BY); ctx.lineTo(BX + c * S, BY + ROWS * S); ctx.stroke(); } for (let r = 1; r < ROWS; r++) { ctx.beginPath(); ctx.moveTo(BX, BY + r * S); ctx.lineTo(BX + COLS * S, BY + r * S); ctx.stroke(); }
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (board[r][c]) cell(BX + c * S, BY + r * S, flash.includes(r) && Math.floor(time * 20) % 2 ? "#fff" : COLORS[board[r][c]]);
+  if (state === "play" && !flash.length) {
+    let gy = cur.y; while (fits(cur, cur.m, cur.x, gy + 1)) gy++;
+    cur.m.forEach((row, r) => row.forEach((v, c) => { if (v) { if (gy + r >= 0) cell(BX + (cur.x + c) * S, BY + (gy + r) * S, COLORS[cur.k], .22); if (cur.y + r >= 0) cell(BX + (cur.x + c) * S, BY + (cur.y + r) * S, COLORS[cur.k]); } }));
+  }
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 5, 5); } ctx.globalAlpha = 1;
+  Kit.text(ctx, "SCORE", 120, 70, 16, "#bde"); Kit.text(ctx, String(score), 120, 104, 32, "#ffd23f");
+  Kit.text(ctx, "RECORD", 120, 160, 16, "#bde"); Kit.text(ctx, String(Math.max(best, score)), 120, 190, 24);
+  Kit.text(ctx, "NIVEAU " + Math.min(level, 10) + "/10", 120, 250, 24, "#6ee06e"); Kit.text(ctx, "Lignes " + lines, 120, 282, 20);
+  Kit.text(ctx, "SUIVANT", 680, 70, 16, "#bde");
+  if (next) next.m.forEach((row, r) => row.forEach((v, c) => { if (v) cell(640 + c * S - (next.m[0].length > 3 ? 14 : 0), 90 + r * S, COLORS[next.k]); }));
+  ctx.save(); ctx.translate(680, 330); ctx.scale(3, 3); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 4), time); ctx.restore();
+  Kit.text(ctx, HEROES[hero].name, 680, 400, 14, HEROES[hero].ship.color);
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.7)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "BRAVO !", W / 2, 240, 64, "#ffd23f"); Kit.text(ctx, "10 niveaux terminés ! Score : " + score, W / 2, 300, 26); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.7)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "GAME OVER", W / 2, 240, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score + "  •  " + lines + " lignes", W / 2, 300, 26);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 340, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "calm", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (state === "title" || ((state === "over" || state === "win") && overT <= 0)) { if (e.code === "Space") newGame(); return; }
+    if (state !== "play" || Kit.paused || flash.length) return;
+    if (e.code === "ArrowLeft") move(-1); else if (e.code === "ArrowRight") move(1); else if (e.code === "ArrowUp") rotate(); else if (e.code === "Space" && !e.repeat) hardDrop();
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

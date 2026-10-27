@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Morpion Malin</title>
+<style>
+  html,body{margin:0;height:100%;background:#14102a;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, TOTAL = 10, CELL = 130, BX = 205, BY = 140;
+const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+let hero = heroIndexFromUrl(), state = "title", time = 0, level = 1, score = 0, lives = 3, best = 0, overT = 0, banner = 0;
+let board = Array(9).fill(0), cur = 4, turn = 1, aiT = 0, result = 0, winLine = null, wait = 0, opp = 0, draws = 0, parts = [];
+try { best = +localStorage.getItem("morpion-best") || 0; } catch (e) {}
+const winner = b => { for (const l of LINES) if (b[l[0]] && b[l[0]] === b[l[1]] && b[l[1]] === b[l[2]]) return b[l[0]]; return 0; };
+
+function newGame() { level = 1; score = 0; lives = 3; startRound(); }
+function startRound() {
+  board = Array(9).fill(0); cur = 4; result = 0; winLine = null; wait = 0; opp = (hero + level * 2 + 3) % HEROES.length; if (opp === hero) opp = (opp + 1) % HEROES.length;
+  turn = level % 2 === 1 ? 1 : 2; aiT = .7; state = "play"; banner = 1.6;
+}
+function save() { if (score > best) { best = score; try { localStorage.setItem("morpion-best", best); } catch (e) {} } }
+function minimax(b, who) {
+  const w = winner(b); if (w) return w === 2 ? 1 : -1; if (b.every(v => v)) return 0;
+  let bestV = who === 2 ? -2 : 2;
+  for (let i = 0; i < 9; i++) if (!b[i]) { b[i] = who; const v = minimax(b, who === 2 ? 1 : 2); b[i] = 0; bestV = who === 2 ? Math.max(bestV, v) : Math.min(bestV, v); }
+  return bestV;
+}
+function aiMove() {
+  const free = board.map((v, i) => v ? -1 : i).filter(i => i >= 0), p = Math.min(.92, (level - 1) * .1 + .02);
+  if (Math.random() > p) return free[Math.floor(Math.random() * free.length)];
+  let bestI = free[0], bestV = -2; for (const i of free) { board[i] = 2; const v = minimax(board, 1); board[i] = 0; if (v > bestV || (v === bestV && Math.random() < .3)) { bestV = v; bestI = i; } }
+  return bestI;
+}
+function place(i, who) {
+  board[i] = who; Music.sfx(who === 1 ? "coin" : "flip");
+  const w = winner(board);
+  if (w) { winLine = LINES.find(l => board[l[0]] === w && board[l[1]] === w && board[l[2]] === w); result = w; wait = 1.6; if (w === 1) { score += 100 * level; Music.sfx("match"); } else { lives--; Music.sfx("nope"); } }
+  else if (board.every(v => v)) { result = 3; wait = 1.4; score += 20; Music.sfx("bounce"); }
+  else turn = who === 1 ? 2 : 1;
+}
+function update(dt) {
+  time += dt; overT -= dt; banner -= dt;
+  if (state !== "play" || Kit.paused) return;
+  if (result) {
+    wait -= dt;
+    if (wait <= 0) {
+      if (result === 1) { if (level >= TOTAL) { state = "win"; overT = .8; Music.sfx("win"); save(); } else { level++; Music.sfx("level"); startRound(); } }
+      else if (result === 2 && lives <= 0) { state = "over"; overT = .8; Music.sfx("lose"); save(); } else startRound();
+    }
+    return;
+  }
+  if (turn === 2) { aiT -= dt; if (aiT <= 0) { place(aiMove(), 2); aiT = .6; } }
+}
+function mark(i, who, a) {
+  const x = BX + (i % 3) * CELL + CELL / 2, y = BY + Math.floor(i / 3) * CELL + CELL / 2, h = HEROES[who === 1 ? hero : opp];
+  ctx.fillStyle = who === 1 ? "rgba(74,163,255,.25)" : "rgba(255,90,110,.25)"; ctx.beginPath(); ctx.roundRect(x - 56, y - 56, 112, 112, 16); ctx.fill();
+  ctx.strokeStyle = who === 1 ? "#4aa3ff" : "#ff5a6e"; ctx.lineWidth = 4; ctx.stroke();
+  ctx.save(); ctx.translate(x, y); ctx.scale(2.8 * a, 2.8 * a); heroTop(ctx, h, { x: 0, y: 1 }, Math.sin(time * 5 + i) * .8, time); ctx.restore();
+}
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, "#241a5a"); g.addColorStop(1, "#0f3a4a"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  if (state === "title") {
+    Kit.text(ctx, "MORPION MALIN", W / 2, 120, 54, "#ffd23f");
+    Kit.text(ctx, "Aligne 3 personnages avant l'adversaire !", W / 2, 170, 22);
+    Kit.text(ctx, "← ↑ ↓ → : choisir la case   •   ESPACE : jouer ici   •   M : musique", W / 2, 218, 15, "#cfe");
+    Kit.text(ctx, "10 adversaires de plus en plus malins. Gagne pour passer au niveau suivant !", W / 2, 244, 15, "#ffd23f");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 320, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 395); ctx.scale(2.8, 2.8); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 6), time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 510, 26); if (best) Kit.text(ctx, "Record : " + best, W / 2, 553, 18, "#bde");
+    return;
+  }
+  ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 6; ctx.lineCap = "round";
+  for (let i = 1; i < 3; i++) { ctx.beginPath(); ctx.moveTo(BX + i * CELL, BY + 8); ctx.lineTo(BX + i * CELL, BY + 3 * CELL - 8); ctx.moveTo(BX + 8, BY + i * CELL); ctx.lineTo(BX + 3 * CELL - 8, BY + i * CELL); ctx.stroke(); }
+  board.forEach((v, i) => { if (v) mark(i, v, 1); });
+  if (!result && turn === 1) { ctx.strokeStyle = HEROES[hero].ship.color; ctx.lineWidth = 5; ctx.setLineDash([10, 8]); ctx.beginPath(); ctx.roundRect(BX + (cur % 3) * CELL + 6, BY + Math.floor(cur / 3) * CELL + 6, CELL - 12, CELL - 12, 14); ctx.stroke(); ctx.setLineDash([]); }
+  if (winLine) { ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 10; ctx.beginPath(); const a = winLine[0], b = winLine[2]; ctx.moveTo(BX + (a % 3) * CELL + CELL / 2, BY + Math.floor(a / 3) * CELL + CELL / 2); ctx.lineTo(BX + (b % 3) * CELL + CELL / 2, BY + Math.floor(b / 3) * CELL + CELL / 2); ctx.stroke(); }
+  ctx.save(); ctx.translate(100, 300); ctx.scale(2.4, 2.4); heroTop(ctx, HEROES[hero], { x: 1, y: 0 }, 0, time); ctx.restore(); Kit.text(ctx, "Toi", 100, 360, 18, "#4aa3ff");
+  ctx.save(); ctx.translate(700, 300); ctx.scale(2.4, 2.4); heroTop(ctx, HEROES[opp], { x: -1, y: 0 }, 0, time); ctx.restore(); Kit.text(ctx, HEROES[opp].name.split(" ")[0], 700, 360, 18, "#ff5a6e");
+  Kit.text(ctx, "Score " + score, 14, 34, 24, "#ffd23f", "left"); Kit.text(ctx, "Niveau " + level + "/" + TOTAL, W / 2, 34, 22); Kit.text(ctx, "♥".repeat(Math.max(0, lives)), W - 14, 34, 26, "#ff5a6e", "right");
+  Kit.text(ctx, result === 1 ? "Gagné ! 🎉" : result === 2 ? "Perdu…" : result === 3 ? "Égalité, on rejoue !" : turn === 1 ? "À toi de jouer" : "L'adversaire réfléchit…", W / 2, 90, 26, result === 1 ? "#6ee06e" : "#fff");
+  Kit.text(ctx, "Adversaire : " + HEROES[opp].name + " (niveau de malice " + Math.round(Math.min(.92, (level - 1) * .1 + .02) * 100) + " %)", W / 2, H - 24, 15, "#cfe");
+  if (banner > 0 && state === "play") Kit.text(ctx, "Niveau " + level, W / 2, 560, 30, "#ffd23f");
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "CHAMPION !", W / 2, 240, 62, "#ffd23f"); Kit.text(ctx, "Tu as battu les 10 adversaires ! Score : " + score, W / 2, 305, 26); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "GAME OVER", W / 2, 240, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score + "  •  Niveau " + level, W / 2, 305, 26);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 345, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 405, 22, "#bde"); }
+}
+Kit.install({
+  canvas: cv, song: "memory", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (state === "title" || ((state === "over" || state === "win") && overT <= 0)) { if (e.code === "Space") newGame(); return; }
+    if (state !== "play" || Kit.paused || result || turn !== 1) return;
+    let x = cur % 3, y = Math.floor(cur / 3);
+    if (e.code === "ArrowLeft") x = (x + 2) % 3; else if (e.code === "ArrowRight") x = (x + 1) % 3; else if (e.code === "ArrowUp") y = (y + 2) % 3; else if (e.code === "ArrowDown") y = (y + 1) % 3;
+    else if (e.code === "Space") { if (!board[cur]) place(cur, 1); return; } else return;
+    cur = y * 3 + x;
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

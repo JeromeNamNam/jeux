@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jeu</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0b1a;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="heroes.js"></script>
+<script src="kit.js"></script>
+<script src="arcade.js"></script>
+<script src="arcade2.js"></script>
+<script src="arcade3.js"></script>
+<script src="arcade4.js"></script>
+<script src="games.js"></script>
+<script>
+"use strict";
+const gid = new URLSearchParams(location.search).get("g") || (() => { try { return sessionStorage.getItem("game"); } catch (e) { return null; } })();
+const cfg = GAMES.find(g => g.id === gid) || GAMES[0];
+try { sessionStorage.setItem("game", cfg.id); } catch (e) {}
+document.title = cfg.name;
+const G = Arcade.start(cfg);
+</script>
+<script src="dock.js"></script>
+</body>
+</html>

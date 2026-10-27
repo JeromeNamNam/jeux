@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trott' Park</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0f1d;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+/* Trott' Park : trottinette freestyle avec une vraie physique de pente (élan, rampes, bowls, rails, grinds, figures, chutes). */
+const cv = document.getElementById("c"), ctx = cv.getContext("2d"), W = 800, H = 600, STEP = 4, GRAV = 1300, RUN = 120, Z = 1.3, VW = W / Z, VH = H / Z;
+let hero = heroIndexFromUrl(), state = "title", time = 0, pidx = 0, best = {}, starsSaved = {}, overT = 0;
+try { best = JSON.parse(localStorage.getItem("trott-best") || "{}"); starsSaved = JSON.parse(localStorage.getItem("trott-stars") || "{}"); } catch (e) {}
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), angDiff = (a, b) => { let d = (a - b) % (2 * Math.PI); if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI; return d; };
+
+/* ---------------- Les skateparks ---------------- */
+function build(def) {
+  const ys = [0], rails = [], gaps = []; let y = 0; const X = () => (ys.length - 1) * STEP;
+  const P = {
+    flat(l) { for (let i = 0; i < Math.round(l / STEP); i++) ys.push(y); },
+    ramp(l, dy) { const n = Math.max(1, Math.round(l / STEP)), y0 = y; for (let i = 1; i <= n; i++) ys.push(y0 + dy * i / n); y = y0 + dy; },
+    qUp(R, deg) { const a = deg * Math.PI / 180, L = R * Math.sin(a), n = Math.max(1, Math.round(L / STEP)), y0 = y; for (let i = 1; i <= n; i++) ys.push(y0 - R * (1 - Math.cos(Math.asin(Math.min(1, L * i / n / R))))); y = y0 - R * (1 - Math.cos(a)); },
+    qDown(R, deg) { const a = deg * Math.PI / 180, L = R * Math.sin(a), n = Math.max(1, Math.round(L / STEP)), y0 = y; for (let i = 1; i <= n; i++) ys.push(y0 + R * (1 - Math.cos(a)) - R * (1 - Math.cos(Math.asin(Math.min(1, (L - L * i / n) / R))))); y = y0 + R * (1 - Math.cos(a)); },
+    step(dy) { y += dy; ys.push(y); },
+    gap(l) { const x0 = X(); for (let i = 0; i < Math.round(l / STEP); i++) ys.push(y + 1400); gaps.push({ x1: x0, x2: x0 + l }); },
+    box(l, h) { P.step(-h); P.flat(l); P.step(h); },
+    rail(l, h, dy = 0) { const x = X(); rails.push({ x1: x, x2: x + l, y1: y - h, y2: y - h + dy }); },
+    sine(len, amp, per) { const n = Math.round(len / STEP), y0 = y; for (let i = 1; i <= n; i++) ys.push(y0 - amp * (1 - Math.cos(2 * Math.PI * per * i / n)) / 2); },
+    kicker(h) { P.ramp(h * 2.4, -h); P.step(h); },
+    jumpGap(h, l) { P.ramp(h * 2.4, -h); P.gap(l); P.ramp(h * 2.8, h); },
+  };
+  def.ops(P); P.flat(600);
+  const nonPit = ys.filter(v => v < 900), floor = Math.max(...nonPit) + 260;
+  return { ...def, ys, rails, gaps, len: (ys.length - 1) * STEP, floor };
+}
+const PARKS = [
+  { id: "street", name: "Street Plaza", emoji: "🏙️", desc: "Rampes, funbox, escaliers avec rails et un saut au-dessus du vide. Le classique du street !", sky: ["#6ec6ff", "#d8f0ff"], fill: "#8a8a96", top: "#cfd0da", bg: "#5a7ab0", s1: 2500, s2: 6000, goal: "Réussis 3 grinds sur des rails", test: s => s.grinds >= 3,
+    ops(P) { P.flat(700); P.kicker(56); P.flat(420); P.ramp(150, -50); P.rail(200, 32); P.flat(200); P.ramp(150, 50); P.flat(460); P.rail(5 * 62, 40, 5 * 26); for (let i = 0; i < 5; i++) { P.flat(62); P.step(26); } P.flat(520); P.jumpGap(60, 120); P.flat(560); P.box(160, 44); P.flat(260); P.rail(220, 36); P.flat(260); P.kicker(72); P.flat(500); P.ramp(130, -44); P.flat(180); P.ramp(130, 44); } },
+  { id: "bowl", name: "Bowl Béton", emoji: "🥣", desc: "Un grand bowl en béton avec des murs courbes : prends de la vitesse et envole-toi au-dessus du bord.", sky: ["#ffb36e", "#ffe8c0"], fill: "#9a9488", top: "#e0dccb", bg: "#c88a5a", s1: 2200, s2: 5500, goal: "Réussis un salto (backflip ou frontflip)", test: s => s.flips >= 1,
+    ops(P) { P.flat(500); P.rail(260, 34); P.flat(300); P.qDown(190, 68); P.flat(560); P.qUp(190, 68); P.flat(300); P.qDown(220, 70); P.flat(420); P.qUp(220, 70); P.flat(340); P.qDown(170, 66); P.flat(380); P.qUp(170, 66); P.flat(320); } },
+  { id: "half", name: "Mini Rampe", emoji: "🛹", desc: "Une halfpipe géante : monte tout en haut, décolle et enchaîne les figures dans les airs.", sky: ["#8ec8ff", "#e8f4ff"], fill: "#8a96a8", top: "#d8e4f4", bg: "#6a8ac0", s1: 2500, s2: 6500, goal: "Saute à plus de 230 px au-dessus de la rampe", test: s => s.peak >= 230,
+    ops(P) { P.flat(420); P.qDown(280, 78); P.flat(520); P.qUp(280, 78); P.flat(360); P.qDown(300, 78); P.flat(560); P.qUp(300, 78); P.flat(420); } },
+  { id: "pump", name: "Pump Track de la Plage", emoji: "🏖️", desc: "Des bosses sur le sable : pompe avec la flèche ↓ au creux des bosses pour gagner de la vitesse.", sky: ["#6ee0ff", "#fff4c0"], fill: "#d8b878", top: "#f0dca0", bg: "#e8c078", s1: 1500, s2: 3500, goal: "Atteins 40 km/h", test: s => s.vmax >= 40,
+    ops(P) { P.flat(600); P.ramp(240, 70); P.sine(1700, 52, 8); P.flat(260); P.kicker(66); P.flat(360); P.sine(1400, 60, 6); P.flat(240); P.jumpGap(70, 130); P.flat(500); P.sine(900, 56, 4); P.flat(300); } },
+  { id: "mega", name: "Méga Rampe", emoji: "🚀", desc: "Une immense piste d'élan, une rampe énorme et un gouffre à franchir. Pour les plus courageux !", sky: ["#4a6ad8", "#e8d0ff"], fill: "#7a7a90", top: "#c8c8e0", bg: "#6a5ab0", s1: 2000, s2: 5000, goal: "Franchis le gouffre en atterrissant de l'autre côté", test: s => s.gaps >= 1,
+    ops(P) { P.flat(300); P.ramp(900, 260); P.flat(400); P.qUp(300, 45); P.gap(260); P.ramp(560, 150); P.flat(400); P.jumpGap(70, 130); P.flat(500); P.kicker(84); P.flat(500); } },
+  { id: "neon", name: "Néon Indoor", emoji: "🌃", desc: "Un skatepark couvert, de nuit, avec des néons : un peu de tout, rampes, bowl, rails et gap.", sky: ["#1a0f4a", "#5a2a8a"], fill: "#3a3a58", top: "#ff4ab0", bg: "#2a1a5a", s1: 3000, s2: 7000, goal: "Réussis un tour 360°, un barspin et un tailwhip", test: s => s.spins >= 1 && s.bars >= 1 && s.whips >= 1,
+    ops(P) { P.flat(600); P.kicker(60); P.flat(300); P.rail(200, 34); P.flat(240); P.qDown(150, 64); P.flat(300); P.qUp(150, 64); P.flat(260); P.box(180, 48); P.flat(240); P.rail(5 * 56, 38, 5 * 24); for (let i = 0; i < 5; i++) { P.flat(56); P.step(24); } P.flat(400); P.jumpGap(64, 120); P.flat(420); P.kicker(76); P.flat(400); } },
+].map(build);
+
+const gy = (pk, x) => { if (x < 0) return pk.ys[0] - 1500; const f = x / STEP, i = Math.floor(f); if (i >= pk.ys.length - 1) return pk.ys[pk.ys.length - 1] - (x > pk.len ? 1500 : 0); const t = f - i; return pk.ys[i] * (1 - t) + pk.ys[i + 1] * t; };
+const slope = (pk, x) => { const a = gy(pk, x - 3), b = gy(pk, x), c = gy(pk, x + 3), d0 = b - a, d1 = c - b; return Math.atan2(Math.abs(d1 - d0) > 14 ? (Math.abs(d0) < Math.abs(d1) ? d0 : d1) : (c - a) / 2, 3); };
+const railY = (r, x) => r.y1 + (r.y2 - r.y1) * (x - r.x1) / (r.x2 - r.x1), railAng = r => Math.atan2(r.y2 - r.y1, r.x2 - r.x1);
+
+/* ---------------- Le rider : un vrai squelette articulé ---------------- */
+const BAR = { x: 15, y: -40 }, POSE0 = { hx: -2, hy: -44, tor: .22, rfx: -12, rfy: -17, ffx: 7, ffy: -17, h1x: 15, h1y: -40, h2x: 15, h2y: -40, sc: 0, bar: 0 };
+const POSES = {
+  ride: {}, crouch: { hx: -3, hy: -34, tor: .55 }, tuck: { hy: -38, tor: .2, rfy: -26, ffy: -26 },
+  grab: { hx: -3, hy: -35, tor: .7, rfy: -27, ffy: -27, h1x: 3, h1y: -20, h2x: -7, h2y: -20 },
+  nohand: { hy: -38, tor: .1, rfy: -26, ffy: -26, h1x: 27, h1y: -70, h2x: -16, h2y: -68 },
+  superman: { hx: -6, hy: -44, tor: 1.35, rfx: -36, rfy: -46, ffx: -30, ffy: -40, h2x: 14, h2y: -41, sc: 1.25 },
+  cancan: { hy: -42, tor: .2, rfx: 16, rfy: -31 }, tabletop: { hx: -6, hy: -40, tor: .35, rfx: -16, rfy: -31, ffx: 3, ffy: -32, sc: 1.2 },
+  xup: { hy: -38, tor: .25, rfy: -26, ffy: -26, h1x: 17, h2x: 13, bar: Math.PI }, nofoot: { hx: -4, hy: -41, tor: .3, rfx: -32, rfy: -38, ffx: 24, ffy: -36 },
+};
+for (const k in POSES) POSES[k] = { ...POSE0, ...POSES[k] };
+const STYLES = { KeyX: ["superman", "SUPERMAN", 320], KeyV: ["tabletop", "TABLETOP", 340], KeyC: ["cancan", "CAN-CAN", 280], KeyB: ["xup", "X-UP", 260], KeyN: ["nofoot", "NO-FOOTER", 360], KeyG: ["grab", "GRAB", 200], ArrowDown: ["nohand", "NO-HANDER", 240] };
+const STYLE_ORDER = ["KeyX", "KeyV", "KeyC", "KeyN", "KeyB", "KeyG", "ArrowDown"];
+function ik(x0, y0, tx, ty, a, b, sgn) {
+  const dx = tx - x0, dy = ty - y0; let d = Math.hypot(dx, dy); d = clamp(d, Math.abs(a - b) + .5, a + b - .3); const base = Math.atan2(dy, dx), ang = Math.acos(clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1));
+  return { kx: x0 + a * Math.cos(base + sgn * ang), ky: y0 + a * Math.sin(base + sgn * ang), ex: x0 + d * Math.cos(base), ey: y0 + d * Math.sin(base) };
+}
+function rigPoints(P) {
+  const H = [P.hx, P.hy], S = [P.hx + Math.sin(P.tor) * 26, P.hy - Math.cos(P.tor) * 26], head = [S[0] + Math.sin(P.tor) * 7, S[1] - Math.cos(P.tor) * 7 - 3];
+  return { H, S, head, legF: ik(H[0], H[1], P.ffx, P.ffy, 15, 15, -1), legB: ik(H[0], H[1], P.rfx, P.rfy, 15, 15, -1), armF: ik(S[0], S[1], P.h1x, P.h1y, 11, 11, 1), armB: ik(S[0], S[1], P.h2x, P.h2y, 11, 11, 1) };
+}
+const limb = (c, a, b, w, col) => { c.strokeStyle = col; c.lineWidth = w; c.lineCap = "round"; c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); };
+const PANTS = "#2b3350", PANTS_B = "#1d2338", SHOE = "#1a1a22";
+function drawHead(c, hd, tilt) {
+  const h = HEROES[hero]; c.save(); c.translate(hd[0], hd[1]); c.rotate(tilt);
+  c.fillStyle = h.hat === "ears" || h.hat === "penguin" ? h.body : h.skin; c.beginPath(); c.arc(0, 0, 6.6, 0, 7); c.fill();
+  c.fillStyle = h.accent; c.beginPath(); c.arc(-.4, -1.4, 7.4, Math.PI * 1.02, Math.PI * 2.06); c.closePath(); c.fill(); c.fillStyle = "rgba(255,255,255,.35)"; c.fillRect(-4, -6, 5, 2);
+  c.fillStyle = h.accent; switch (h.hat) {
+    case "ears": case "bunny": c.beginPath(); c.moveTo(-6, -4); c.lineTo(-4, -13); c.lineTo(0, -6); c.moveTo(6, -4); c.lineTo(4, -13); c.lineTo(0, -6); c.fill(); break;
+    case "horns": case "viking": c.fillStyle = "#fff3d0"; c.beginPath(); c.moveTo(-6, -4); c.lineTo(-9, -12); c.lineTo(-2, -6); c.moveTo(6, -4); c.lineTo(9, -12); c.lineTo(2, -6); c.fill(); break;
+    case "antenna": case "alien": c.strokeStyle = "#999"; c.lineWidth = 1.5; c.beginPath(); c.moveTo(0, -7); c.lineTo(1, -13); c.stroke(); c.fillStyle = "#ff4d4d"; c.beginPath(); c.arc(1, -14, 2, 0, 7); c.fill(); break;
+    case "crown": c.fillStyle = "#ffd23f"; c.beginPath(); c.moveTo(-5, -7); c.lineTo(-5, -12); c.lineTo(-2, -9); c.lineTo(0, -13); c.lineTo(2, -9); c.lineTo(5, -12); c.lineTo(5, -7); c.fill(); break;
+    case "wizard": c.fillStyle = "#6a3fc4"; c.beginPath(); c.moveTo(-7, -5); c.lineTo(0, -19); c.lineTo(7, -5); c.fill(); break;
+    case "cap": c.fillStyle = "#c8281e"; c.fillRect(2, -4, 9, 2.6); break;
+    case "band": c.fillStyle = "#e11d2e"; c.fillRect(-7, -1, 14, 2.4); c.fillRect(-12, -1, 5, 1.6); break;
+  }
+  c.fillStyle = "#111"; c.fillRect(2.4, -.4, 2, 2.4); c.restore();
+}
+/* pr : { wrot, barPh, whipPh } ; P : pose courante ; dessin dans le repère de la trottinette, rider tourné vers +x */
+function drawRig(c, P, pr) {
+  const h = HEROES[hero], pts = rigPoints(P), shirt = h.body, skin = h.skin;
+  const leg = (l, col) => { limb(c, pts.H, [l.kx, l.ky], 7.5, col); limb(c, [l.kx, l.ky], [l.ex, l.ey], 6.2, col); limb(c, [l.ex - 1, l.ey + 1], [l.ex + 6, l.ey + 1], 5, SHOE); };
+  const arm = (a, col) => { limb(c, pts.S, [a.kx, a.ky], 5.2, col); limb(c, [a.kx, a.ky], [a.ex, a.ey], 4.4, skin); };
+  leg(pts.legB, PANTS_B); arm(pts.armB, shirt);
+  c.save(); c.translate(BAR.x, BAR.y); c.rotate(P.sc); c.translate(-BAR.x, -BAR.y);
+  const rearX = 17 - 34 * Math.cos(pr.whipPh), wheel = (x) => { c.fillStyle = "#14141c"; c.beginPath(); c.arc(x, -7, 7, 0, 7); c.fill(); c.strokeStyle = "#8a90a0"; c.lineWidth = 1.5; c.beginPath(); for (let i = 0; i < 3; i++) { const a = pr.wrot + i * 2.094; c.moveTo(x, -7); c.lineTo(x + Math.cos(a) * 6, -7 + Math.sin(a) * 6); } c.stroke(); c.fillStyle = "#cfd6e4"; c.beginPath(); c.arc(x, -7, 2, 0, 7); c.fill(); };
+  c.strokeStyle = G_COLOR(); c.lineWidth = 5; c.lineCap = "round"; c.beginPath(); c.moveTo(17, -14); c.lineTo(rearX, -14); c.stroke(); wheel(rearX); wheel(17);
+  c.strokeStyle = "#cfd6e4"; c.lineWidth = 4; c.beginPath(); c.moveTo(17, -7); c.lineTo(BAR.x, BAR.y); c.stroke();
+  const bw = Math.cos(pr.barPh + P.bar) * 8; c.strokeStyle = "#2a2a36"; c.lineWidth = 4; c.beginPath(); c.moveTo(BAR.x - bw, BAR.y); c.lineTo(BAR.x + bw, BAR.y); c.stroke(); c.fillStyle = "#555"; c.beginPath(); c.arc(BAR.x + bw, BAR.y, 2.4, 0, 7); c.arc(BAR.x - bw, BAR.y, 2.4, 0, 7); c.fill();
+  c.restore();
+  limb(c, [pts.H[0] - 1, pts.H[1] + 1], pts.S, 11.5, shirt); limb(c, [pts.H[0], pts.H[1]], [pts.H[0] + 1, pts.H[1] + 3], 11, PANTS);
+  drawHead(c, pts.head, P.tor * .5); leg(pts.legF, PANTS); arm(pts.armF, shirt);
+}
+const G_COLOR = () => HEROES[hero].ship.color;
+
+/* ---------------- Partie ---------------- */
+let pk, R, st, left, cam, floats = [], parts = [], shake = 0, flash = "", flashT = 0, grindAcc = 0, grindTick = 0, results = null, freeMode = false, feed = [];
+const fl = (x, y, t, c) => floats.push({ x, y, t, c: c || "#ffd23f", life: 1.2 });
+const burst = (x, y, c, n) => { for (let i = 0; i < n; i++) { const a = Math.random() * 6.3, s = 30 + Math.random() * 150; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 60, life: .5 + Math.random() * .3, c }); } };
+const copyPose = p => ({ ...p });
+function startRun(free) {
+  freeMode = !!free; pk = PARKS[pidx]; const x0 = 260; R = { x: x0, y: gy(pk, x0), v: 0, mode: "ground", vx: 0, vy: 0, ang: slope(pk, x0), w: 0, face: 1, rotTot: 0, flips: 0, yaw: 0, yawV: 0, yawDone: 0, barT: 0, barRevs: 0, barPh: 0, whipT: 0, whipRevs: 0, whipPh: 0, curStyle: null, styleT: {}, sinceStyle: 9, pend: 0, ntr: 0, chain: 0, chainT: 0, airT: 0, peak: 0, rail: null, rv: 0, wrot: 0, safeX: x0, safeT: 0, bailT: 0, takeX: x0, push: 0, rag: null, pose: copyPose(POSES.ride), done: {}, stepT: 0 };
+  st = { score: 0, grinds: 0, flips: 0, spins: 0, bars: 0, whips: 0, nohands: 0, gaps: 0, peak: 0, vmax: 0, tricks: 0, bails: 0 }; left = free ? 1e9 : RUN; floats = []; parts = []; grindAcc = 0; flash = ""; flashT = 0; feed = [];
+  cam = { x: x0 - VW * .38, y: R.y - VH * .64 }; state = "play";
+}
+function takeoff(vx, vy, ang) { R.mode = "air"; R.vx = vx; R.vy = vy; R.ang = ang; R.w = 0; R.rotTot = 0; R.flips = 0; R.yaw = 0; R.yawV = 0; R.yawDone = 0; R.barT = R.whipT = 0; R.barRevs = R.whipRevs = 0; R.curStyle = null; R.styleT = {}; R.sinceStyle = 9; R.done = {}; R.pend = 0; R.ntr = 0; R.airT = 0; R.peak = 0; R.takeX = R.x; R.lockR = !!Kit.keys.ArrowRight; R.lockL = !!Kit.keys.ArrowLeft; }
+function addTrick(name, pts, key) {
+  R.ntr++; const g = Math.round(pts * (1 + .5 * (R.ntr - 1))); R.pend += g; st.tricks++; if (key) st[key]++; flash = name + "  +" + g; flashT = 1.1; feed.unshift({ t: name, p: g, life: 3 }); if (feed.length > 5) feed.pop(); Music.sfx("flip");
+  if (!R.done.combo) { const f = R.flips > 0, y = R.yawDone >= 2; if (f && y) { R.done.combo = 1; R.pend += 600; feed.unshift({ t: "CORKSCREW (salto + 360)", p: 600, life: 3 }); } else if (f && R.yawDone >= 1) { R.done.combo = 1; R.pend += 350; feed.unshift({ t: "FLAIR (salto + 180)", p: 350, life: 3 }); } }
+}
+function bail(why) {
+  if (R.mode === "bail") return;
+  const sxs = R.face * Math.cos(R.yaw || 0), ca = Math.cos(R.ang), sa = Math.sin(R.ang), wp = (lx, ly) => [R.x + ca * lx * sxs - sa * ly, R.y + sa * lx * sxs + ca * ly], pt = rigPoints(R.pose), v0 = R.mode === "ground" ? [R.v * Math.cos(R.ang), R.v * Math.sin(R.ang)] : [R.vx, R.vy];
+  const mk = (p, extra) => { const w = wp(p[0], p[1]); return { x: w[0], y: w[1], px: w[0] - (v0[0] + (extra || 0)) * .016, py: w[1] - v0[1] * .016 + 2 }; };
+  const J = { head: mk(pt.head, 40), S: mk(pt.S), H: mk(pt.H), kF: mk([pt.legF.kx, pt.legF.ky]), fF: mk([pt.legF.ex, pt.legF.ey], 60), kB: mk([pt.legB.kx, pt.legB.ky]), fB: mk([pt.legB.ex, pt.legB.ey], -40), eF: mk([pt.armF.kx, pt.armF.ky]), hF: mk([pt.armF.ex, pt.armF.ey], 80), eB: mk([pt.armB.kx, pt.armB.ky]), hB: mk([pt.armB.ex, pt.armB.ey], 50) };
+  const C = [["head", "S", 10], ["S", "H", 26], ["H", "kF", 15], ["kF", "fF", 15], ["H", "kB", 15], ["kB", "fB", 15], ["S", "eF", 11], ["eF", "hF", 11], ["S", "eB", 11], ["eB", "hB", 11]];
+  R.rag = { J, C, sx: R.x, sy: R.y - 14, svx: v0[0] * .9 + R.face * 40, svy: v0[1] * .9 - 140, sr: R.ang, srv: (Math.random() < .5 ? -1 : 1) * 6 };
+  R.mode = "bail"; R.bailT = 1.7; R.pend = 0; R.chain = 0; R.ntr = 0; st.bails++; grindAcc = 0; Music.sfx("hit"); shake = .4; burst(R.x, R.y - 20, "#ff9a3c", 14); flash = why; flashT = 1.4;
+}
+function respawn() { const x = R.safeX; R.x = x; R.y = gy(pk, x); R.v = 0; R.mode = "ground"; R.ang = slope(pk, x); R.w = 0; R.face = 1; R.rag = null; R.pend = 0; R.chain = 0; R.yaw = 0; R.barT = R.whipT = 0; R.pose = copyPose(POSES.ride); R.vx = R.vy = 0; }
+function land() {
+  const g = gy(pk, R.x), phi = slope(pk, R.x), diff = angDiff(R.ang, phi), q = Math.abs(diff), ym = Math.abs(R.yaw - Math.round(R.yaw / Math.PI) * Math.PI);
+  if (R.curStyle || R.sinceStyle < .12) { R.y = g; bail("Relâche ta figure avant d'atterrir !"); return; }
+  if (R.barT > .1 || R.whipT > .1) { R.y = g; bail("Figure pas finie !"); return; }
+  if (ym > .65) { R.y = g; bail("Mal tourné à l'atterrissage !"); return; }
+  if (q > .78) { R.y = g; bail("Mauvais atterrissage !"); return; }
+  const t = { x: Math.cos(phi), y: Math.sin(phi) }, vt = R.vx * t.x + R.vy * t.y, loss = q < .3 ? .96 : q < .55 ? .85 : .65, sw = Math.round(R.yaw / Math.PI) % 2 !== 0;
+  R.mode = "ground"; R.y = g; R.v = vt * loss; R.ang = phi; R.w = 0; R.face = R.v < -20 ? -1 : R.v > 20 ? 1 : R.face; if (sw) { R.face *= -1; R.v *= 1; } R.yaw = 0; R.yawV = 0; Music.sfx("bounce"); burst(R.x, R.y, "#cfd0da", 6);
+  for (const gp of pk.gaps) if (R.takeX < gp.x1 + 14 && R.x > gp.x2) { st.gaps++; fl(R.x, R.y - 90, "GAP FRANCHI !", "#6ee06e"); R.pend += 300; feed.unshift({ t: "GAP FRANCHI", p: 300, life: 3 }); }
+  if (R.airT > .45) R.pend += Math.round(R.airT * 60);
+  if (R.pend > 0) { const mult = 1 + .25 * Math.min(6, R.chain), bank = Math.round(R.pend * mult); st.score += bank; R.chain++; R.chainT = 4; fl(R.x, R.y - 80, "+" + bank + (R.chain > 1 ? "  CHAÎNE x" + R.chain : "") + (q < .25 ? "  PROPRE !" : "") + (sw ? "  SWITCH" : ""), q < .25 ? "#6ee06e" : "#ffd23f"); Music.sfx(bank > 800 ? "win" : "match"); burst(R.x, R.y, "#ffd23f", 12); }
+  R.pend = 0; R.ntr = 0;
+}
+function targetPose(k, dir) {
+  if (R.mode === "air") { const key = STYLE_ORDER.find(c => k[c]); if (key) return POSES[STYLES[key][0]]; return POSES.tuck; }
+  if (R.mode === "grind") return POSES.crouch;
+  if (R.mode === "ground") {
+    if (k.ArrowDown) return POSES.crouch;
+    if (R.push > .3 && Math.abs(R.v) < 540) { const ph = (Math.sin(time * 13) + 1) / 2, P = { ...POSES.ride, hy: -41, hx: -3, tor: .42 }; P.rfx = -12 - ph * 24; P.rfy = -17 + ph * 15; return P; }
+    return POSES.ride;
+  }
+  return POSES.ride;
+}
+
+function physics(dt) {
+  const k = Kit.keys, dir = (k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0), down = !!k.ArrowDown;
+  R.chainT -= dt; if (R.chainT <= 0 && R.mode === "ground") R.chain = 0;
+  const tp = targetPose(k, dir), P = R.pose, rate = Math.min(1, dt * (R.mode === "air" ? 16 : 12)); for (const key in tp) P[key] += (tp[key] - P[key]) * rate;
+  if (R.mode === "ground") {
+    const phi = slope(pk, R.x); let a = GRAV * .86 * Math.sin(phi);
+    if (dir) { if (Math.sign(R.v) === dir || Math.abs(R.v) < 30) { a += dir * (Math.abs(R.v) < 520 ? 300 : 20); R.push = Math.min(1, R.push + dt * 6); } else a += dir * 780; } else R.push = Math.max(0, R.push - dt * 5);
+    const curv = slope(pk, R.x + 14) - slope(pk, R.x - 14); if (down && curv > .04 && Math.abs(R.v) > 20) a += Math.sign(R.v || 1) * 460;
+    a -= R.v * .10 + Math.sign(R.v) * 9; if (Math.abs(R.v) < 6 && dir === 0 && Math.abs(Math.sin(phi)) < .05) R.v = 0; R.v += a * dt;
+    if (Math.abs(R.v) > 8) R.face = R.v > 0 ? 1 : -1; st.vmax = Math.max(st.vmax, Math.abs(R.v) / 14);
+    const vx = R.v * Math.cos(phi), vy = R.v * Math.sin(phi), nx = R.x + vx * dt, ny = gy(pk, nx);
+    if (ny < R.y - 18) { R.v = -R.v * .25; R.vx = 0; }
+    else if (R.y + vy * dt < ny - 1.6 && Math.abs(R.v) > 25) { R.x = nx; R.y = R.y + vy * dt; takeoff(vx, vy, phi); }
+    else { R.x = nx; R.y = ny; R.ang = phi; }
+    R.wrot += R.v * dt / 7; R.safeT += dt; if (Math.abs(phi) > .1) R.safeT = 0; if (R.safeT > .7 && Math.abs(phi) < .05 && gy(pk, R.x - 60) < 900 && gy(pk, R.x + 60) < 900) R.safeX = R.x;
+    if (gy(pk, R.x) > 900) R.mode = "air";
+  } else if (R.mode === "air") {
+    R.airT += dt; R.vy += GRAV * dt; R.x += R.vx * dt; R.y += R.vy * dt; const g = gy(pk, R.x); R.peak = Math.max(R.peak, g < 900 ? g - R.y : 0); st.peak = Math.max(st.peak, R.peak);
+    if (!k.ArrowRight) R.lockR = false; if (!k.ArrowLeft) R.lockL = false; const rot = (k.ArrowRight && !R.lockR ? 1 : 0) - (k.ArrowLeft && !R.lockL ? 1 : 0); R.w += (rot * 6.4 - R.w) * Math.min(1, dt * 9); R.ang += R.w * dt; R.rotTot += R.w * dt;
+    if (!rot && Math.abs(R.rotTot) < 1) { let th = Math.atan2(R.vy, R.vx); if (Math.abs(th) > Math.PI / 2) th -= Math.sign(th) * Math.PI; R.ang += angDiff(th * .85, R.ang) * Math.min(1, dt * 2.6); }
+    const nf = Math.floor(Math.abs(R.rotTot) / (2 * Math.PI * .9)); if (nf > R.flips) { R.flips = nf; addTrick(R.rotTot < 0 ? "BACKFLIP" : "FRONTFLIP", 450, "flips"); }
+    const yd = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0); if (yd) R.yawV += (yd * 9 - R.yawV) * Math.min(1, dt * 10); else R.yawV *= Math.max(0, 1 - dt * 5); R.yaw += R.yawV * dt;
+    if (!yd && Math.abs(R.yawV) < 1.2) R.yaw += (Math.round(R.yaw / Math.PI) * Math.PI - R.yaw) * Math.min(1, dt * 3);
+    const yc = Math.floor(Math.abs(R.yaw) / (Math.PI * .9)); if (yc > R.yawDone) { R.yawDone = yc; const pts = [0, 150, 320, 520, 800, 1150, 1600, 2100][Math.min(yc, 7)]; addTrick(yc * 180 + "°" + (yc % 2 ? "  (SWITCH)" : ""), pts, yc === 2 ? "spins" : null); if (yc > 2) st.spins += 0; }
+    if (R.barT > 0) { R.barT -= dt; R.barPh += dt * 2 * Math.PI / .34; if (R.barT <= 0) { R.barT = 0; R.barRevs = 0; R.barPh = 0; } }
+    if (R.whipT > 0) { R.whipT -= dt; R.whipPh += dt * 2 * Math.PI / .45; if (R.whipT <= 0) { R.whipT = 0; R.whipRevs = 0; R.whipPh = 0; } }
+    const held = STYLE_ORDER.find(c => k[c]);
+    if (held && held !== R.curStyle) { if (R.curStyle && (R.styleT[R.curStyle] || 0) >= .25) addTrick(STYLES[R.curStyle][1], STYLES[R.curStyle][2], R.curStyle === "ArrowDown" ? "nohands" : null); R.curStyle = held; R.styleT[held] = 0; }
+    if (held) { R.styleT[held] += dt; R.sinceStyle = 0; } else { if (R.curStyle) { if ((R.styleT[R.curStyle] || 0) >= .25) addTrick(STYLES[R.curStyle][1], STYLES[R.curStyle][2], R.curStyle === "ArrowDown" ? "nohands" : null); R.curStyle = null; } R.sinceStyle += dt; }
+    if (g > 900 && R.y > pk.floor + 120) { fl(R.x, pk.floor - 40, "Plouf ! 💦", "#9fd8ff"); burst(R.x, pk.floor, "#9fd8ff", 20); Music.sfx("nope"); bail("Dans le gouffre !"); R.rag = null; R.bailT = .9; return; }
+    for (const r of pk.rails) { if (R.x > r.x1 && R.x < r.x2 && R.vy > 0) { const ry = railY(r, R.x); if (R.y >= ry - 3 && R.y <= ry + 20 && Math.abs(angDiff(R.ang, railAng(r))) < .65 && R.barT < .1 && R.whipT < .1 && Math.abs(R.yaw - Math.round(R.yaw / Math.PI) * Math.PI) < .7) { R.mode = "grind"; R.rail = r; R.rv = R.vx / Math.cos(railAng(r)); R.y = ry; R.ang = railAng(r); grindAcc = 0; grindTick = 0; st.grinds++; fl(R.x, R.y - 70, "GRIND !", "#9fe8ff"); Music.sfx("coin"); if (R.pend > 0) { st.score += Math.round(R.pend); R.pend = 0; } R.face = R.rv >= 0 ? 1 : -1; if (Math.round(R.yaw / Math.PI) % 2) R.face *= -1; R.yaw = 0; break; } } }
+    if (R.mode === "air" && R.y >= g) land();
+  } else if (R.mode === "grind") {
+    const r = R.rail, ang = railAng(r); R.rv += (dir ? dir * 70 * dt : 0); R.rv *= 1 - .05 * dt; R.x += R.rv * Math.cos(ang) * dt; R.y = railY(r, clamp(R.x, r.x1, r.x2)); R.ang = ang;
+    grindAcc += 90 * dt * (1 + .25 * Math.min(6, R.chain)); grindTick -= dt; if (grindTick <= 0) { grindTick = .1; Music.sfx("brick"); burst(R.x, R.y, "#ffd23f", 2); }
+    if (R.x < r.x1 || R.x > r.x2) { const bank = Math.round(grindAcc); st.score += bank; R.chain++; R.chainT = 4; fl(R.x, R.y - 70, "+" + bank, "#9fe8ff"); takeoff(R.rv * Math.cos(ang), R.rv * Math.sin(ang), ang); R.pend = 0; R.rail = null; }
+  } else if (R.mode === "bail") {
+    R.bailT -= dt; const rg = R.rag;
+    if (rg) {
+      for (const key in rg.J) { const p = rg.J[key], vx = (p.x - p.px) * .995, vy = (p.y - p.py) * .995; p.px = p.x; p.py = p.y; p.x += vx; p.y += vy + GRAV * dt * dt; }
+      for (let it = 0; it < 7; it++) { for (const [a, b, len] of rg.C) { const A = rg.J[a], B = rg.J[b], dx = B.x - A.x, dy = B.y - A.y, d = Math.hypot(dx, dy) || .01, diff = (d - len) / d * .5; A.x += dx * diff; A.y += dy * diff; B.x -= dx * diff; B.y -= dy * diff; }
+        for (const key in rg.J) { const p = rg.J[key], gg = gy(pk, p.x) - 3; if (p.y > gg) { p.y = gg; p.px += (p.x - p.px) * .25; p.py = p.y + (p.y - p.py) * 0; } } }
+      rg.svy += GRAV * dt; rg.sx += rg.svx * dt; rg.sy += rg.svy * dt; rg.sr += rg.srv * dt; const sg = gy(pk, rg.sx) - 9; if (rg.sy > sg) { rg.sy = sg; rg.svy *= -.3; rg.svx *= .88; rg.srv *= .8; }
+      R.x = rg.J.H.x; R.y = rg.J.H.y + 30;
+    }
+    if (R.bailT <= 0) respawn();
+  }
+}
+function update(dt) {
+  time += dt; overT -= dt; shake = Math.max(0, shake - dt); flashT -= dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 420 * dt; if (p.life <= 0) parts.splice(i, 1); }
+  for (let i = floats.length - 1; i >= 0; i--) { floats[i].life -= dt; floats[i].y -= 30 * dt; if (floats[i].life <= 0) floats.splice(i, 1); }
+  for (let i = feed.length - 1; i >= 0; i--) { feed[i].life -= dt; if (feed[i].life <= 0) feed.splice(i, 1); }
+  if (state !== "play" || Kit.paused) return;
+  left -= dt; if (left <= 0) return finish();
+  physics(dt / 2); physics(dt / 2);
+  const tx = R.x - VW * .38 + clamp((R.mode === "ground" ? R.v * Math.cos(R.ang) : R.vx) * .22, -140, 140), ty = R.y - VH * .64;
+  cam.x += (tx - cam.x) * Math.min(1, dt * 5); cam.y += (ty - cam.y) * Math.min(1, dt * 4);
+  if (R.mode === "ground" && Math.abs(R.v) > 380 && Math.random() < dt * 20) burst(R.x, R.y, "#cfd0da", 1);
+}
+function finish() {
+  state = "results"; overT = .8; const s = Math.round(st.score), s1 = s >= pk.s1, s2 = s >= pk.s2, s3 = pk.test(st), n = s1 + s2 + s3;
+  results = { score: s, stars: [s1, s2, s3], n, rec: s > (best[pk.id] || 0) }; if (results.rec) best[pk.id] = s; starsSaved[pk.id] = Math.max(starsSaved[pk.id] || 0, n);
+  try { localStorage.setItem("trott-best", JSON.stringify(best)); localStorage.setItem("trott-stars", JSON.stringify(starsSaved)); } catch (e) {}
+  Music.sfx(n >= 2 ? "win" : "level");
+}
+
+/* ---------------- Dessin ---------------- */
+function terrain(c) {
+  const x0 = cam.x;
+  c.beginPath(); c.moveTo(0, VH + 60);
+  for (let sx = 0; sx <= VW + STEP; sx += STEP) { const g = gy(pk, x0 + sx); c.lineTo(sx, (g > 900 ? pk.floor : g) - cam.y); }
+  c.lineTo(VW + STEP, VH + 60); c.closePath(); c.fillStyle = pk.fill; c.fill();
+  c.beginPath(); for (let sx = 0; sx <= VW + STEP; sx += STEP) { const g = gy(pk, x0 + sx), y = (g > 900 ? pk.floor : g) - cam.y; sx ? c.lineTo(sx, y) : c.moveTo(sx, y); } c.strokeStyle = pk.top; c.lineWidth = 5; c.stroke();
+  for (const gp of pk.gaps) { const sx = gp.x1 - x0, ex = gp.x2 - x0; if (ex < -10 || sx > VW + 10) continue; c.fillStyle = pk.id === "mega" ? "#14143a" : "#3a8ad8"; c.fillRect(sx, pk.floor - cam.y, ex - sx, H + 400); c.fillStyle = "rgba(255,255,255,.3)"; c.fillRect(sx, pk.floor - cam.y, ex - sx, 4); }
+  c.strokeStyle = "rgba(0,0,0,.14)"; c.lineWidth = 2; for (let sx = 0; sx < VW; sx += 80) { const x = x0 + sx, g = gy(pk, x); if (g < 900) { c.beginPath(); c.moveTo(sx, g - cam.y + 40); c.lineTo(sx + 40, g - cam.y + 40); c.stroke(); c.beginPath(); c.moveTo(sx + 40, g - cam.y + 90); c.lineTo(sx + 80, g - cam.y + 90); c.stroke(); } }
+  for (const r of pk.rails) { if (r.x2 - x0 < -20 || r.x1 - x0 > VW + 20) continue; c.strokeStyle = pk.id === "neon" ? "#4af0ff" : "#dfe6f0"; c.lineWidth = 5; c.beginPath(); c.moveTo(r.x1 - x0, r.y1 - cam.y); c.lineTo(r.x2 - x0, r.y2 - cam.y); c.stroke(); c.strokeStyle = "#7a8296"; c.lineWidth = 3; for (let x = r.x1; x <= r.x2 + 1; x += 70) { const ry = railY(r, Math.min(x, r.x2)); c.beginPath(); c.moveTo(x - x0, ry - cam.y); c.lineTo(x - x0, gy(pk, x) - cam.y); c.stroke(); } }
+}
+function background(c) {
+  const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, pk.sky[0]); g.addColorStop(1, pk.sky[1]); c.fillStyle = g; c.fillRect(0, 0, W, H);
+  if (pk.id === "neon") { c.fillStyle = "#fff"; for (let i = 0; i < 40; i++) { c.globalAlpha = .3 + .3 * Math.sin(time * 2 + i); c.fillRect((i * 151) % W, (i * 83) % 260, 2, 2); } c.globalAlpha = 1; c.strokeStyle = "#ff4ab0"; c.lineWidth = 3; for (let i = 0; i < 5; i++) { c.beginPath(); c.moveTo(0, 90 + i * 40 - cam.y * .1); c.lineTo(W, 60 + i * 40 - cam.y * .1); c.stroke(); } }
+  c.fillStyle = pk.bg; c.globalAlpha = .45; for (let i = -1; i < 12; i++) { const x = i * 130 - (cam.x * .25) % 130, hh = 90 + ((i + 20) * 53) % 120; c.fillRect(x, H * .62 - hh - cam.y * .08, 90, hh + 260); } c.globalAlpha = .7; for (let i = -1; i < 9; i++) { const x = i * 190 - (cam.x * .45) % 190, hh = 60 + ((i + 40) * 37) % 90; c.fillRect(x, H * .7 - hh - cam.y * .15, 120, hh + 260); } c.globalAlpha = 1;
+  if (pk.id === "pump") { c.fillStyle = "#ffe97a"; c.beginPath(); c.arc(660, 90, 40, 0, 7); c.fill(); }
+}
+function drawRiderAt(c, x, y, face, ang, yaw, pose, pr) { c.save(); c.translate(x, y); c.rotate(ang); c.scale(face * (Math.abs(Math.cos(yaw)) < .08 ? .08 * Math.sign(Math.cos(yaw) || 1) : Math.cos(yaw)), 1); c.scale(1.12, 1.12); drawRig(c, pose, pr); c.restore(); }
+function drawRagdoll(c, rg) {
+  const J = rg.J, p = k => [J[k].x - cam.x, J[k].y - cam.y], h = HEROES[hero], q = (a, b, w, col) => limb(c, p(a), p(b), w, col);
+  c.save(); c.translate(rg.sx - cam.x, rg.sy - cam.y); c.rotate(rg.sr); c.strokeStyle = G_COLOR(); c.lineWidth = 5; c.lineCap = "round"; c.beginPath(); c.moveTo(-17, -2); c.lineTo(17, -2); c.stroke(); c.strokeStyle = "#cfd6e4"; c.lineWidth = 4; c.beginPath(); c.moveTo(17, 0); c.lineTo(15, -33); c.stroke(); c.fillStyle = "#14141c"; c.beginPath(); c.arc(-17, 5, 7, 0, 7); c.arc(17, 5, 7, 0, 7); c.fill(); c.restore();
+  q("H", "kB", 7.5, PANTS_B); q("kB", "fB", 6.2, PANTS_B); q("S", "eB", 5.2, h.body); q("eB", "hB", 4.4, h.skin); q("S", "H", 11.5, h.body); q("H", "kF", 7.5, PANTS); q("kF", "fF", 6.2, PANTS); q("S", "eF", 5.2, h.body); q("eF", "hF", 4.4, h.skin);
+  const hd = p("head"); c.fillStyle = h.skin; c.beginPath(); c.arc(hd[0], hd[1], 6.6, 0, 7); c.fill(); c.fillStyle = h.accent; c.beginPath(); c.arc(hd[0], hd[1] - 1.4, 7.4, Math.PI * 1.02, Math.PI * 2.06); c.fill();
+}
+function drawRider(c) {
+  if (R.mode === "bail") { if (R.rag) drawRagdoll(c, R.rag); return; }
+  const sx = R.x - cam.x, sy = R.y - cam.y;
+  drawRiderAt(c, sx, sy, R.face, R.ang, R.yaw, R.pose, { wrot: R.wrot, barPh: R.barPh, whipPh: R.whipPh });
+}
+const G = (t, x, y, s, c, a) => Kit.text(ctx, t, x, y, s, c, a);
+function hudPlay(c) {
+  if (freeMode) G("MODE LIBRE ∞", W / 2, 36, 22, "#9fe8ff"); else { const mins = Math.floor(left / 60), secs = Math.floor(left % 60); G("⏱ " + mins + ":" + String(secs).padStart(2, "0"), W / 2, 36, 26, left < 15 ? "#ff7a8a" : "#fff"); }
+  G(Math.round(st.score) + " pts", 14, 38, 30, "#ffd23f", "left"); G(Math.round(Math.abs(R.mode === "ground" ? R.v : Math.hypot(R.vx, R.vy)) / 14) + " km/h", W - 14, 34, 20, "#fff", "right");
+  if (R.mode === "air" || R.mode === "grind") { const v = R.mode === "grind" ? Math.round(grindAcc) : Math.round(R.pend); if (v > 0) G("En cours : +" + v, W / 2, 80, 24, "#fff"); }
+  if (R.chain > 0 && R.mode !== "bail") G("Chaîne x" + R.chain, 14, 68, 20, "#6ee06e", "left");
+  feed.forEach((f, i) => { c.globalAlpha = clamp(f.life, 0, 1); G(f.t + "  +" + f.p, W - 14, 100 + i * 22, 15, "#ffe98a", "right"); }); c.globalAlpha = 1;
+  if (flashT > 0) { c.globalAlpha = clamp(flashT * 2, 0, 1); G(flash, W / 2, 130, 32, /!$/.test(flash) ? "#ff9a9a" : "#ffd23f"); c.globalAlpha = 1; }
+  if (!freeMode) { const s = Math.round(st.score), g = [[s >= pk.s1, "Score " + pk.s1], [s >= pk.s2, "Score " + pk.s2], [pk.test(st), pk.goal]]; g.forEach(([ok, t], i) => G((ok ? "★ " : "☆ ") + t, 14, H - 78 + i * 18, 14, ok ? "#ffd23f" : "#cfd6e4", "left")); }
+  G("SOL : → pousser   ← freiner   ESPACE sauter   ↓ s'accroupir / pomper     R recommencer   Retour arrière : menu", W / 2, H - 28, 11, "rgba(255,255,255,.8)");
+  G("AIR : ← → salto   A D tourner (180°, 360°…)   ESPACE barspin   ↑ tailwhip   ↓ mains libres   X superman   C can-can   V tabletop   B x-up   N sans pieds   G grab", W / 2, H - 10, 11, "rgba(255,255,255,.8)");
+}
+function drawParkPreview(c, p, x, y, w, h) {
+  c.save(); c.fillStyle = "rgba(0,0,0,.25)"; c.beginPath(); c.roundRect(x, y, w, h, 14); c.fill(); c.beginPath(); c.rect(x, y, w, h); c.clip();
+  const ys = p.ys.filter((_, i) => i % 4 === 0).map(v => v > 900 ? p.floor : v), mn = Math.min(...ys), mx = Math.max(...ys), sc = Math.min((w - 24) / ys.length, (h - 30) / Math.max(40, mx - mn));
+  c.beginPath(); ys.forEach((v, i) => { const px = x + 12 + i * ((w - 24) / ys.length), py = y + h - 12 - (mx - v) * sc * .8 - 8; i ? c.lineTo(px, py) : c.moveTo(px, py); }); c.lineTo(x + w - 12, y + h); c.lineTo(x + 12, y + h); c.closePath(); c.fillStyle = p.fill; c.fill(); c.strokeStyle = p.top; c.lineWidth = 3; c.stroke(); c.restore();
+}
+function wrapText(t, x, y, mw, lh) { const words = t.split(" "); let line = ""; for (const w of words) { if (ctx.measureText(line + w).width > mw) { ctx.fillText(line, x, y); line = w + " "; y += lh; } else line += w + " "; } ctx.fillText(line, x, y); }
+function menuRider(y, scale) { ctx.save(); ctx.translate(W / 2, y); ctx.scale(scale, scale); const P = { ...POSES.ride }; drawRig(ctx, P, { wrot: time * 3, barPh: 0, whipPh: 0 }); ctx.restore(); }
+function draw() {
+  if (state === "title") {
+    const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#2a1458"); g.addColorStop(1, "#0f3a5a"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    G("🛴", W / 2, 100, 70, "#fff"); G("TROTT' PARK", W / 2, 175, 54, "#ffd23f"); G("Trottinette freestyle réaliste : un vrai rider, de la vraie physique, toutes les figures !", W / 2, 215, 17);
+    G("6 skateparks à choisir  •  séances de 2 minutes ou mode libre  •  3 étoiles par parc", W / 2, 243, 16, "#cfe");
+    G("◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 320, 22, HEROES[hero].ship.color); menuRider(480, 2.0);
+    G("Appuie sur ESPACE pour choisir ton skatepark", W / 2, 520, 24); G("Échap : retour à la salle de jeux  •  M : musique", W / 2, 560, 15, "#bde"); return;
+  }
+  if (state === "parks") {
+    const p = PARKS[pidx], g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, p.sky[0]); g.addColorStop(1, p.sky[1]); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.fillStyle = "rgba(0,0,0,.4)"; ctx.fillRect(0, 0, W, H);
+    G("CHOISIS TON SKATEPARK", W / 2, 60, 36, "#ffd23f"); G("◀", 60, 300, 60, "#fff"); G("▶", W - 60, 300, 60, "#fff");
+    G(p.emoji + "  " + p.name, W / 2, 130, 40, "#fff"); drawParkPreview(ctx, p, 150, 160, 500, 190);
+    ctx.fillStyle = "#fff"; ctx.font = "bold 18px sans-serif"; ctx.textAlign = "center"; wrapText(p.desc, W / 2, 385, 600, 24);
+    const n = starsSaved[p.id] || 0; G("★".repeat(n) + "☆".repeat(3 - n), W / 2, 456, 34, "#ffd23f"); G(best[p.id] ? "Record : " + best[p.id] + " pts" : "Pas encore de record", W / 2, 486, 18, "#fff");
+    G("Défi : " + p.goal, W / 2, 514, 16, "#9fe8ff"); PARKS.forEach((q, i) => { ctx.fillStyle = i === pidx ? "#ffd23f" : "rgba(255,255,255,.4)"; ctx.beginPath(); ctx.arc(W / 2 - 75 + i * 30, 542, 7, 0, 7); ctx.fill(); });
+    G("← → : choisir  •  ESPACE : séance de 2 min  •  L : mode libre (sans chrono)  •  Retour arrière : changer de héros", W / 2, 580, 13, "#cfe"); return;
+  }
+  ctx.save(); if (shake > 0) ctx.translate((Math.random() - .5) * shake * 20, (Math.random() - .5) * shake * 20);
+  background(ctx); ctx.save(); ctx.scale(Z, Z); terrain(ctx); drawRider(ctx);
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x - cam.x, p.y - cam.y, 4, 4); } ctx.globalAlpha = 1;
+  for (const f of floats) { ctx.globalAlpha = Math.min(1, f.life * 2); G(f.t, f.x - cam.x, f.y - cam.y, 20, f.c); } ctx.globalAlpha = 1; ctx.restore(); ctx.restore();
+  if (state === "play") hudPlay(ctx);
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(0, 0, W, H); G("PAUSE", W / 2, H / 2, 60); }
+  if (state === "results") {
+    ctx.fillStyle = "rgba(0,0,0,.7)"; ctx.fillRect(0, 0, W, H); G("SÉANCE TERMINÉE !", W / 2, 130, 48, "#ffd23f"); G(pk.name, W / 2, 175, 24); G(results.score + " points", W / 2, 240, 52, "#fff"); if (results.rec) G("Nouveau record !", W / 2, 280, 24, "#6ee06e");
+    G(results.stars.map(s => s ? "★" : "☆").join(" "), W / 2, 340, 64, "#ffd23f");
+    const lines = [["Score " + pk.s1, results.stars[0]], ["Score " + pk.s2, results.stars[1]], [pk.goal, results.stars[2]]]; lines.forEach(([t, ok], i) => G((ok ? "✔ " : "✘ ") + t, W / 2, 385 + i * 28, 18, ok ? "#6ee06e" : "#ff9a9a"));
+    G("Grinds " + st.grinds + "  •  Saltos " + st.flips + "  •  Figures " + st.tricks + "  •  Chutes " + st.bails + "  •  Vitesse max " + Math.round(st.vmax) + " km/h", W / 2, 490, 15, "#cfe");
+    G("ESPACE : rejouer ce parc   •   Retour arrière : autre skatepark", W / 2, 540, 18, "#bde");
+  }
+}
+
+/* ---------------- Clavier ---------------- */
+Kit.install({
+  canvas: cv, song: "run", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    const c = e.code;
+    if (state === "title") { if (c === "Space") state = "parks"; return; }
+    if (state === "parks") { if (c === "ArrowLeft") pidx = (pidx + PARKS.length - 1) % PARKS.length; else if (c === "ArrowRight") pidx = (pidx + 1) % PARKS.length; else if (c === "Space") startRun(false); else if (c === "KeyL") startRun(true); else if (c === "Backspace") state = "title"; if (c === "ArrowLeft" || c === "ArrowRight") Music.sfx("flip"); return; }
+    if (state === "results") { if (c === "Space" && overT <= 0) startRun(); else if (c === "Backspace") state = "parks"; return; }
+    if (state !== "play" || Kit.paused) return;
+    if (c === "KeyR") { startRun(freeMode); return; } if (c === "Backspace") { state = "parks"; return; }
+    if (R.mode === "ground" && c === "Space") { const phi = slope(pk, R.x), nx = Math.sin(phi), ny = -Math.cos(phi), J = Kit.keys.ArrowDown ? 560 : 440; takeoff(R.v * Math.cos(phi) + nx * J, R.v * Math.sin(phi) + ny * J, phi); Music.sfx("jump"); burst(R.x, R.y, "#cfd0da", 5); return; }
+    if (R.mode === "grind" && c === "Space") { const ang = R.ang; const J = 400, v = R.rv; const r = R.rail; const bank = Math.round(grindAcc); st.score += bank; R.chain++; R.chainT = 4; fl(R.x, R.y - 70, "+" + bank, "#9fe8ff"); takeoff(v * Math.cos(ang) + Math.sin(ang) * J, v * Math.sin(ang) - Math.cos(ang) * J, ang); R.rail = null; Music.sfx("jump"); return; }
+    if (R.mode === "air") {
+      if (c === "Space" && R.barRevs < 4) { R.barRevs++; R.barT += .34; addTrick(["", "BARSPIN", "DOUBLE BARSPIN", "TRIPLE BARSPIN", "QUADRUPLE BARSPIN"][R.barRevs], 160 + 40 * R.barRevs, "bars"); }
+      else if (c === "ArrowUp" && R.whipRevs < 4) { R.whipRevs++; R.whipT += .45; addTrick(["", "TAILWHIP", "DOUBLE TAILWHIP", "TRIPLE TAILWHIP", "QUADRUPLE TAILWHIP"][R.whipRevs], 260 + 60 * R.whipRevs, "whips"); }
+    }
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pluie de Météores</title>
+<style>
+  html,body{margin:0;height:100%;background:#050514;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, GY = 540;
+let hero = heroIndexFromUrl(), state = "title", time = 0, score = 0, best = 0, lives = 3, survived = 0, overT = 0, spawnT = 0, dashCd = 0, dashT = 0;
+let P = { x: W / 2, dir: 1, run: 0, inv: 0 }, rocks = [], stars = [], parts = [], bg = Array.from({ length: 70 }, () => ({ x: Math.random() * W, y: Math.random() * H, z: .3 + Math.random() }));
+try { best = +localStorage.getItem("meteores-best") || 0; } catch (e) {}
+
+function newGame() { P = { x: W / 2, dir: 1, run: 0, inv: 0 }; rocks = []; stars = []; parts = []; score = 0; lives = 3; survived = 0; spawnT = 1; dashCd = 0; dashT = 0; state = "play"; }
+function boom(x, y, c, n) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.3, s = 40 + Math.random() * 200; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 60, life: .5, c }); } }
+function hurt() { if (P.inv > 0) return; lives--; P.inv = 2; Music.sfx("hit"); boom(P.x, GY - 20, "#ff9a3c", 24);
+  if (lives <= 0) { state = "over"; overT = .8; Music.sfx("lose"); if (score > best) { best = score; try { localStorage.setItem("meteores-best", best); } catch (e) {} } } }
+function spawn() {
+  const el = survived, r = Math.random(), x = 30 + Math.random() * (W - 60);
+  if (r < .2) stars.push({ x, y: -20, vy: 160 + Math.random() * 60, k: Math.random() < .08 ? "heart" : "star" });
+  else { const big = Math.random() < .25, rad = big ? 34 : 16 + Math.random() * 10; rocks.push({ x, y: -50, vy: 190 + Math.min(300, el * 5) + Math.random() * 90, vx: (Math.random() - .5) * 120, r: rad, rot: Math.random() * 6 }); }
+}
+function update(dt) {
+  time += dt; overT -= dt;
+  for (const s of bg) { s.y += s.z * 40 * dt; if (s.y > H) { s.y = 0; s.x = Math.random() * W; } }
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 500 * dt; if (p.life <= 0) parts.splice(i, 1); }
+  if (state !== "play" || Kit.paused) return;
+  survived += dt; if (survived >= 120) { state = "win"; overT = .8; Music.sfx("win"); if (score > best) { best = score; try { localStorage.setItem("meteores-best", best); } catch (e) {} } return; } if (P.inv > 0) P.inv -= dt; dashCd = Math.max(0, dashCd - dt); dashT = Math.max(0, dashT - dt);
+  const k = Kit.keys, dx = (k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0); if (dx) { P.dir = dx; P.run += dt * 12; }
+  P.x = Math.max(24, Math.min(W - 24, P.x + (dashT > 0 ? P.dir * 1100 : dx * 330) * dt));
+  spawnT -= dt; if (spawnT <= 0) { spawn(); spawnT = Math.max(.22, .75 - survived * .008) + Math.random() * .2; }
+  for (let i = rocks.length - 1; i >= 0; i--) {
+    const r = rocks[i]; r.y += r.vy * dt; r.x += r.vx * dt; r.rot += dt * 3; if (r.x < 10 || r.x > W - 10) r.vx = -r.vx;
+    if (r.y > GY + 10) { boom(r.x, GY, "#ffb23a", 10); rocks.splice(i, 1); score++; Music.sfx("bounce"); continue; }
+    if (Math.hypot(r.x - P.x, r.y - (GY - 24)) < r.r + 16 && r.y < GY) { boom(r.x, r.y, "#ff7a3a", 14); rocks.splice(i, 1); hurt(); }
+  }
+  for (let i = stars.length - 1; i >= 0; i--) {
+    const s = stars[i]; s.y += s.vy * dt;
+    if (s.y > H) { stars.splice(i, 1); continue; }
+    if (Math.hypot(s.x - P.x, s.y - (GY - 24)) < 34) { stars.splice(i, 1); if (s.k === "heart") { lives = Math.min(6, lives + 1); Music.sfx("power"); } else { score += 10; Music.sfx("coin"); } boom(s.x, s.y, s.k === "heart" ? "#ff5a7a" : "#ffd23f", 10); }
+  }
+}
+
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#070722"); g.addColorStop(1, "#3a1850"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#fff"; for (const s of bg) { ctx.globalAlpha = .4 + s.z * .4; ctx.fillRect(s.x, s.y, s.z * 2, s.z * 2); } ctx.globalAlpha = 1;
+  ctx.fillStyle = "#2a1a40"; ctx.beginPath(); ctx.moveTo(0, GY); for (let x = 0; x <= W; x += 40) ctx.lineTo(x, GY - 20 - 30 * Math.abs(Math.sin(x * .013))); ctx.lineTo(W, GY); ctx.fill();
+  ctx.fillStyle = "#4a3a60"; ctx.fillRect(0, GY, W, H - GY); ctx.fillStyle = "#6a5a80"; ctx.fillRect(0, GY, W, 6);
+  for (const r of rocks) {
+    const gl = ctx.createLinearGradient(r.x, r.y - r.r * 4, r.x, r.y); gl.addColorStop(0, "rgba(255,140,40,0)"); gl.addColorStop(1, "rgba(255,140,40,.55)"); ctx.fillStyle = gl;
+    ctx.beginPath(); ctx.moveTo(r.x - r.r * .8, r.y); ctx.lineTo(r.x - r.vx * .15, r.y - r.r * 4); ctx.lineTo(r.x + r.r * .8, r.y); ctx.fill();
+    ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.rot); ctx.fillStyle = "#8a6a5a"; ctx.beginPath(); for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4, rr = r.r * (k % 2 ? .82 : 1); ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.fill();
+    ctx.fillStyle = "#6a4a3a"; ctx.beginPath(); ctx.arc(-r.r * .25, -r.r * .2, r.r * .25, 0, 7); ctx.arc(r.r * .3, r.r * .25, r.r * .18, 0, 7); ctx.fill(); ctx.restore();
+  }
+  for (const s of stars) { ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(time * 2); if (s.k === "heart") { ctx.fillStyle = "#ff3d6e"; ctx.beginPath(); ctx.arc(-6, -3, 7, 0, 7); ctx.arc(6, -3, 7, 0, 7); ctx.moveTo(-13, -1); ctx.lineTo(0, 13); ctx.lineTo(13, -1); ctx.fill(); }
+    else { ctx.fillStyle = "#ffd23f"; ctx.shadowColor = "#ffd23f"; ctx.shadowBlur = 14; ctx.beginPath(); for (let k = 0; k < 10; k++) { const rr = k % 2 ? 6 : 14, a = k * Math.PI / 5 - Math.PI / 2; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.fill(); ctx.shadowBlur = 0; } ctx.restore(); }
+  if (state !== "title" && !(P.inv > 0 && Math.floor(time * 14) % 2)) {
+    if (dashT > 0) { ctx.globalAlpha = .4; ctx.fillStyle = HEROES[hero].ship.color; ctx.fillRect(P.x - P.dir * 90, GY - 52, 90, 48); ctx.globalAlpha = 1; }
+    ctx.save(); ctx.translate(P.x, GY - 42); ctx.scale(1.4 * P.dir, 1.4); heroSide(ctx, HEROES[hero], Math.sin(P.run) * 5, true, time); ctx.restore();
+  }
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 4, 4); } ctx.globalAlpha = 1;
+  if (state === "title") {
+    ctx.fillStyle = "rgba(5,5,30,.55)"; ctx.fillRect(0, 0, W, H);
+    Kit.text(ctx, "PLUIE DE MÉTÉORES", W / 2, 120, 52, "#ffd23f");
+    Kit.text(ctx, "Esquive les météores et attrape les étoiles !", W / 2, 170, 22);
+    Kit.text(ctx, "← → : courir   •   ESPACE : ruée éclair (esquive rapide)   •   P : pause   •   M : musique", W / 2, 218, 15, "#cfe");
+    Kit.text(ctx, "⭐ +10 points     ❤ une vie en plus     ☄ ouch !", W / 2, 245, 16, "#ffd23f");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 320, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 380); ctx.scale(2.4, 2.4); heroSide(ctx, HEROES[hero], Math.sin(time * 10) * 5, true, time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 510, 26); if (best) Kit.text(ctx, "Record : " + best, W / 2, 553, 18, "#fff");
+    return;
+  }
+  Kit.text(ctx, "Score " + score, 14, 34, 24, "#ffd23f", "left"); Kit.text(ctx, "Niveau " + Math.min(10, 1 + Math.floor(survived / 12)) + "/10  •  " + Math.floor(survived) + " s", W / 2, 34, 20);
+  Kit.text(ctx, "♥".repeat(Math.max(0, lives)), W - 14, 34, 26, "#ff5a6e", "right");
+  ctx.fillStyle = "rgba(0,0,0,.4)"; ctx.fillRect(14, H - 26, 120, 12); ctx.fillStyle = dashCd > 0 ? "#888" : "#ffe98a"; ctx.fillRect(14, H - 26, 120 * (1 - dashCd / 1.5), 12); Kit.text(ctx, "RUÉE (espace)", 74, H - 32, 11, "#fff");
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "BRAVO !", W / 2, 240, 64, "#ffd23f"); Kit.text(ctx, "Tu as survécu à la pluie de météores ! Score : " + score, W / 2, 300, 24); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "GAME OVER", W / 2, 240, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score + "  •  " + Math.floor(survived) + " secondes", W / 2, 300, 26);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 340, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "fly", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (e.code !== "Space") return;
+    if (state === "title" || ((state === "over" || state === "win") && overT <= 0)) newGame();
+    else if (state === "play" && !Kit.paused && dashCd <= 0) { dashT = .16; dashCd = 1.5; Music.sfx("jump"); }
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

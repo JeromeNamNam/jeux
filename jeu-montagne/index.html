@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Montagne Magique</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1a33;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, TOTAL = 10, LV = 1200, G = 1600, JUMP = 780;
+let hero = heroIndexFromUrl(), state = "title", time = 0, score = 0, lives = 3, best = 0, overT = 0, banner = 0, level = 1, cd = 0, shown = 1;
+let P = { x: W / 2, y: 0, vy: 0, dir: 1, inv: 0 }, plats = [], stars = [], parts = [], camY = 0, topY = 0, startY = 0, goalY = 0, minY = 0, floats = [];
+try { best = +localStorage.getItem("montagne-best") || 0; } catch (e) {}
+const meters = () => Math.max(0, Math.floor((startY - minY) / 10));
+
+function addPlat(y) {
+  const lvl = Math.min(10, 1 + Math.floor(Math.max(0, startY - y) / 10 / LV * 10)), r = Math.random(), w = Math.max(64, 100 - lvl * 4);
+  let type = "normal"; if (r < .06 + lvl * .01) type = "spring"; else if (r < .2 + lvl * .02) type = "moving"; else if (r < .3 + lvl * .03) type = "fragile";
+  const p = { x: 20 + Math.random() * (W - w - 40), y, w, type, t: Math.random() * 6, sp: 60 + lvl * 8, dir: Math.random() < .5 ? -1 : 1, broken: 0 }; plats.push(p);
+  if (Math.random() < .22) stars.push({ x: p.x + w / 2, y: y - 40, got: false });
+}
+function newGame() {
+  score = 0; lives = 3; plats = []; stars = []; parts = []; floats = []; startY = 0; P = { x: W / 2, y: -40, vy: -JUMP, dir: 1, inv: 0 }; minY = P.y; camY = -H + 120; goalY = -LV * 10;
+  plats.push({ x: W / 2 - 60, y: 0, w: 120, type: "normal", t: 0, sp: 0, dir: 1, broken: 0 }); topY = 0;
+  while (topY > camY - 400) { topY -= 70 + Math.random() * (Math.min(10, 1 + meters() / LV * 10) * 6 + 40); addPlat(topY); }
+  level = 1; shown = 1; cd = 0; banner = 1.6; state = "play";
+}
+function save() { if (score > best) { best = score; try { localStorage.setItem("montagne-best", best); } catch (e) {} } }
+function boom(x, y, c, n) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.3, s = 40 + Math.random() * 160; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .5, c }); } }
+function update(dt) {
+  time += dt; overT -= dt; banner -= dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  for (let i = floats.length - 1; i >= 0; i--) { floats[i].life -= dt; floats[i].y -= 40 * dt; if (floats[i].life <= 0) floats.splice(i, 1); }
+  if (state !== "play" || Kit.paused) return;
+  const k = Kit.keys, dx = (k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0); if (dx) P.dir = dx; P.x += dx * 330 * dt; if (P.x < -10) P.x = W + 10; if (P.x > W + 10) P.x = -10;
+  cd = Math.max(0, cd - dt); if (P.inv > 0) P.inv -= dt;
+  const prevY = P.y; P.vy += G * dt; P.y += P.vy * dt;
+  for (const p of plats) { if (p.type === "moving") { p.x += p.dir * p.sp * dt; if (p.x < 10 || p.x + p.w > W - 10) p.dir = -p.dir; } if (p.broken > 0) p.broken += dt; }
+  if (P.vy > 0) for (const p of plats) {
+    if (p.broken > 0) continue;
+    if (prevY <= p.y && P.y >= p.y && P.x > p.x - 8 && P.x < p.x + p.w + 8) {
+      P.y = p.y; P.vy = p.type === "spring" ? -1150 : -JUMP; Music.sfx(p.type === "spring" ? "power" : "bounce"); boom(P.x, P.y, "#fff", 4);
+      if (p.type === "fragile") { p.broken = .001; Music.sfx("nope"); } break;
+    }
+  }
+  if (P.y < minY) { minY = P.y; const m = meters(); score = Math.max(score, m); level = Math.min(10, 1 + Math.floor(m / (LV / 10))); if (level > shown) { shown = level; banner = 1.4; Music.sfx("level"); } }
+  for (const s of stars) if (!s.got && Math.hypot(s.x - P.x, s.y - (P.y - 20)) < 28) { s.got = true; score += 15; Music.sfx("coin"); floats.push({ x: s.x, y: s.y, t: "+15", life: .8 }); boom(s.x, s.y, "#ffd23f", 8); }
+  camY = Math.min(camY, P.y - H * .55);
+  while (topY > camY - 400) { topY -= 70 + Math.random() * (Math.min(10, 1 + meters() / LV * 10) * 6 + 40); if (topY > goalY + 60) addPlat(topY); }
+  if (P.y <= goalY) { score += 500; state = "win"; overT = .8; Music.sfx("win"); save(); return; }
+  plats = plats.filter(p => p.y < camY + H + 80 && p.broken < 1); stars = stars.filter(s => s.y < camY + H + 80 && !s.got);
+  if (P.y - camY > H + 60) {
+    lives--; Music.sfx("hit"); if (lives <= 0) { state = "over"; overT = .8; Music.sfx("lose"); save(); return; }
+    const cand = plats.filter(p => p.y > camY + 60 && p.y < camY + H - 40 && p.type !== "fragile").sort((a, b) => b.y - a.y)[0] || plats[0];
+    P.x = cand.x + cand.w / 2; P.y = cand.y; P.vy = -JUMP; P.inv = 2;
+  }
+}
+function draw() {
+  const m = state === "title" ? 0 : meters(), t = Math.min(1, m / (LV)), g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, `hsl(${215 - t * 20},70%,${55 - t * 40}%)`); g.addColorStop(1, `hsl(${200 - t * 10},70%,${80 - t * 50}%)`); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  if (t > .4) { ctx.fillStyle = "#fff"; for (let i = 0; i < 50; i++) { ctx.globalAlpha = (t - .4) * (.5 + .5 * Math.sin(time * 2 + i)); ctx.fillRect((i * 151) % W, (i * 83) % H, 2, 2); } ctx.globalAlpha = 1; }
+  ctx.fillStyle = "rgba(255,255,255,.7)"; for (let i = 0; i < 5; i++) { const cy = ((i * 170 + (state === "title" ? 0 : -camY * .15)) % (H + 100)); ctx.beginPath(); ctx.ellipse((i * 211) % W, cy, 50, 16, 0, 0, 7); ctx.fill(); }
+  if (state === "title") {
+    Kit.text(ctx, "MONTAGNE MAGIQUE", W / 2, 120, 52, "#ffd23f");
+    Kit.text(ctx, "Rebondis de plateforme en plateforme jusqu'au sommet !", W / 2, 170, 21);
+    Kit.text(ctx, "← → : bouger   •   ESPACE : super bond (5 s d'attente)   •   P : pause   •   M : musique", W / 2, 218, 15, "#cfe");
+    Kit.text(ctx, "🟩 normale   🟦 mobile   🟫 fragile (elle casse !)   🟥 ressort géant   ⭐ +15   •   10 niveaux", W / 2, 244, 15, "#ffd23f");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 320, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 390); ctx.scale(2.2, 2.2); heroSide(ctx, HEROES[hero], 0, false, time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour grimper", W / 2, 510, 26); if (best) Kit.text(ctx, "Record : " + best, W / 2, 553, 18, "#bde");
+    return;
+  }
+  const sy = y => y - camY;
+  if (goalY - camY > -200) { const gy = sy(goalY); ctx.fillStyle = "#fff"; ctx.fillRect(0, gy, W, 14); ctx.fillStyle = "#e8283a"; ctx.fillRect(W / 2 - 3, gy - 70, 6, 70); ctx.beginPath(); ctx.moveTo(W / 2 + 3, gy - 70); ctx.lineTo(W / 2 + 50, gy - 55); ctx.lineTo(W / 2 + 3, gy - 40); ctx.fill(); Kit.text(ctx, "SOMMET !", W / 2, gy - 90, 28, "#ffd23f"); }
+  for (const p of plats) {
+    const y = sy(p.y), col = { normal: "#4ac84a", moving: "#4aa3ff", fragile: "#a8712f", spring: "#e8283a" }[p.type]; ctx.globalAlpha = p.broken > 0 ? 1 - p.broken : 1;
+    ctx.fillStyle = col; ctx.beginPath(); ctx.roundRect(p.x, y, p.w, 12, 6); ctx.fill(); ctx.fillStyle = "rgba(255,255,255,.35)"; ctx.fillRect(p.x + 6, y + 2, p.w - 12, 3);
+    if (p.type === "spring") { ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); for (let i = 0; i < 4; i++) { ctx.moveTo(p.x + p.w / 2 - 10, y - i * 4); ctx.lineTo(p.x + p.w / 2 + 10, y - i * 4 - 2); } ctx.stroke(); }
+    ctx.globalAlpha = 1;
+  }
+  for (const s of stars) { ctx.save(); ctx.translate(s.x, sy(s.y)); ctx.rotate(time * 2); ctx.fillStyle = "#ffd23f"; ctx.shadowColor = "#ffd23f"; ctx.shadowBlur = 12; ctx.beginPath(); for (let k = 0; k < 10; k++) { const r = k % 2 ? 6 : 14, a = k * Math.PI / 5 - Math.PI / 2; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); } ctx.fill(); ctx.restore(); }
+  if (!(P.inv > 0 && Math.floor(time * 14) % 2)) { ctx.save(); ctx.translate(P.x, sy(P.y)); ctx.scale(1.15 * P.dir, 1.15 * (P.vy < 0 ? 1.08 : .94)); ctx.translate(0, -30); heroSide(ctx, HEROES[hero], P.vy < 0 ? 4 : -4, false, time); ctx.restore(); }
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x, sy(p.y), 4, 4); } ctx.globalAlpha = 1;
+  for (const f of floats) { ctx.globalAlpha = Math.min(1, f.life * 2); Kit.text(ctx, f.t, f.x, sy(f.y), 22, "#ffd23f"); } ctx.globalAlpha = 1;
+  ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.fillRect(0, 0, W, 44);
+  Kit.text(ctx, "Score " + score, 14, 31, 22, "#ffd23f", "left"); Kit.text(ctx, "Niveau " + level + "/" + TOTAL + "  •  " + m + " m", W / 2, 31, 20); Kit.text(ctx, "♥".repeat(Math.max(0, lives)), W - 14, 31, 24, "#ff5a6e", "right");
+  ctx.fillStyle = "rgba(0,0,0,.4)"; ctx.fillRect(14, H - 26, 120, 12); ctx.fillStyle = cd > 0 ? "#888" : "#ffe98a"; ctx.fillRect(14, H - 26, 120 * (1 - cd / 5), 12); Kit.text(ctx, "SUPER BOND (espace)", 74, H - 32, 11, "#fff");
+  ctx.fillStyle = "rgba(0,0,0,.4)"; ctx.fillRect(W - 24, 60, 10, 400); ctx.fillStyle = HEROES[hero].ship.color; ctx.fillRect(W - 24, 460 - 400 * Math.min(1, m / LV), 10, 6);
+  if (banner > 0 && state === "play") Kit.text(ctx, level === 1 ? "Grimpe !" : "Niveau " + level, W / 2, 300, 54);
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "AU SOMMET !", W / 2, 240, 60, "#ffd23f"); Kit.text(ctx, "10 niveaux grimpés ! Score : " + score, W / 2, 305, 26); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "GAME OVER", W / 2, 240, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score + "  •  " + m + " m  •  Niveau " + level, W / 2, 305, 26);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 345, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 405, 22, "#bde"); }
+}
+Kit.install({
+  canvas: cv, song: "fly", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (e.code !== "Space") return;
+    if (state === "title" || ((state === "over" || state === "win") && overT <= 0)) newGame();
+    else if (state === "play" && !Kit.paused && cd <= 0) { P.vy = -1000; cd = 5; Music.sfx("power"); boom(P.x, P.y, "#ffb23a", 14); }
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invasion Alien</title>
+<style>
+  html,body{margin:0;height:100%;background:#05030f;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, COLS = 8, TOTAL = 10, PY = 548;
+let hero = heroIndexFromUrl(), state = "title", time = 0, level = 1, score = 0, lives = 3, best = 0, overT = 0, banner = 0;
+let P = { x: W / 2, cd: 0, inv: 0 }, aliens = [], ox = 80, oy = 80, dir = 1, bullets = [], abullets = [], blocks = [], parts = [], ufo = null, ufoT = 10, fireT = 1, total = 1;
+try { best = +localStorage.getItem("invasion-best") || 0; } catch (e) {}
+const FACES = ["👾", "👽", "🤖", "🛸", "💀"];
+
+function newGame() { level = 1; score = 0; lives = 3; startLevel(); }
+function startLevel() {
+  const rows = Math.min(5, 2 + Math.ceil(level / 3)); aliens = []; ox = 80; oy = 70 + Math.min(level, 5) * 6; dir = 1; bullets = []; abullets = []; parts = []; ufo = null; ufoT = 8; fireT = 1.5; P.inv = 1.5;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < COLS; c++) aliens.push({ c, r, alive: true, face: FACES[(r + level) % 4] });
+  total = aliens.length; blocks = [];
+  for (let s = 0; s < 4; s++) for (let r = 0; r < 3; r++) for (let c = 0; c < 6; c++) { if (r === 2 && (c === 2 || c === 3)) continue; blocks.push({ x: 100 + s * 170 + c * 11, y: 450 + r * 10, hp: 3 }); }
+  state = "play"; banner = 1.6;
+}
+function boom(x, y, c, n) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.3, s = 40 + Math.random() * 200; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .5, c }); } }
+function hurt() {
+  if (P.inv > 0) return; lives--; P.inv = 2; Music.sfx("hit"); boom(P.x, PY, "#ff9a3c", 24); abullets = [];
+  if (lives <= 0) { state = "over"; overT = .8; Music.sfx("lose"); save(); }
+}
+function save() { if (score > best) { best = score; try { localStorage.setItem("invasion-best", best); } catch (e) {} } }
+const ax = a => ox + a.c * 56, ay = a => oy + a.r * 46;
+
+function update(dt) {
+  time += dt; overT -= dt; banner -= dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  if (state !== "play" || Kit.paused) return;
+  const k = Kit.keys; P.x = Math.max(24, Math.min(W - 24, P.x + ((k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0)) * 340 * dt)); P.cd -= dt; if (P.inv > 0) P.inv -= dt;
+  if (k.Space && P.cd <= 0 && bullets.length < 3) { bullets.push({ x: P.x, y: PY - 20 }); P.cd = .33; Music.sfx("bounce"); }
+  const alive = aliens.filter(a => a.alive), sp = (26 + level * 8) * (1 + (total - alive.length) / total * 2);
+  ox += dir * sp * dt;
+  if (alive.some(a => ax(a) > W - 30) || alive.some(a => ax(a) < 30)) { dir = -dir; ox += dir * 4; oy += 20; }
+  fireT -= dt;
+  if (fireT <= 0 && alive.length) {
+    fireT = Math.max(.35, 1.3 - level * .08) * (.6 + Math.random() * .8);
+    const col = alive[Math.floor(Math.random() * alive.length)].c, low = alive.filter(a => a.c === col).sort((a, b) => b.r - a.r)[0];
+    abullets.push({ x: ax(low), y: ay(low) + 14, vy: 170 + level * 14 });
+  }
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i]; b.y -= 520 * dt; let gone = b.y < -10;
+    for (const a of alive) if (a.alive && Math.abs(b.x - ax(a)) < 20 && Math.abs(b.y - ay(a)) < 18) { a.alive = false; score += 10 * level; gone = true; boom(ax(a), ay(a), "#7dffb0", 12); Music.sfx("brick"); break; }
+    if (!gone && ufo && Math.abs(b.x - ufo.x) < 26 && Math.abs(b.y - 40) < 16) { score += 100; boom(ufo.x, 40, "#ffd23f", 24); Music.sfx("match"); ufo = null; gone = true; }
+    if (!gone) for (const bl of blocks) if (bl.hp > 0 && Math.abs(b.x - bl.x - 5) < 7 && Math.abs(b.y - bl.y - 4) < 7) { bl.hp--; gone = true; break; }
+    if (gone) bullets.splice(i, 1);
+  }
+  for (let i = abullets.length - 1; i >= 0; i--) {
+    const b = abullets[i]; b.y += b.vy * dt; let gone = b.y > H + 10;
+    for (const bl of blocks) if (!gone && bl.hp > 0 && Math.abs(b.x - bl.x - 5) < 7 && Math.abs(b.y - bl.y - 4) < 8) { bl.hp--; gone = true; }
+    if (!gone && Math.abs(b.x - P.x) < 18 && Math.abs(b.y - PY) < 18) { gone = true; hurt(); }
+    if (gone) abullets.splice(i, 1);
+  }
+  ufoT -= dt; if (ufoT <= 0 && !ufo) { ufo = { x: -30, v: 140 }; ufoT = 14; }
+  if (ufo) { ufo.x += ufo.v * dt; if (ufo.x > W + 40) ufo = null; }
+  if (alive.some(a => ay(a) > PY - 36)) { lives = 0; state = "over"; overT = .8; Music.sfx("lose"); save(); return; }
+  if (!alive.length) { score += 100 * level; Music.sfx("level"); if (level >= TOTAL) { state = "win"; overT = .8; Music.sfx("win"); save(); } else { level++; startLevel(); } }
+}
+
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#0b0630"); g.addColorStop(1, "#1a0a3a"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#fff"; for (let i = 0; i < 60; i++) { ctx.globalAlpha = .3 + .3 * Math.sin(time * 2 + i); ctx.fillRect((i * 131) % W, (i * 77) % H, 2, 2); } ctx.globalAlpha = 1;
+  if (state === "title") {
+    Kit.text(ctx, "INVASION ALIEN", W / 2, 130, 54, "#7dffb0");
+    Kit.text(ctx, "Détruis tous les envahisseurs avant qu'ils n'atterrissent !", W / 2, 180, 21);
+    Kit.text(ctx, "← → : bouger   •   ESPACE : tirer   •   P : pause   •   M : musique   •   10 niveaux", W / 2, 228, 15, "#cfe");
+    Kit.text(ctx, "Cache-toi derrière les boucliers. L'ovni 🛸 donne +100 !", W / 2, 254, 15, "#ffd23f");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 330, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 400); ctx.scale(2.6, 2.6); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 6), time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 510, 26); if (best) Kit.text(ctx, "Record : " + best, W / 2, 553, 18, "#bde");
+    return;
+  }
+  ctx.font = "30px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const a of aliens) if (a.alive) ctx.fillText(a.face, ax(a), ay(a) + Math.sin(time * 6 + a.c) * 2);
+  if (ufo) ctx.fillText("🛸", ufo.x, 40); ctx.textBaseline = "alphabetic";
+  for (const b of blocks) if (b.hp > 0) { ctx.fillStyle = ["#e04a4a", "#e0a03a", "#4ac84a"][b.hp - 1]; ctx.fillRect(b.x, b.y, 10, 9); }
+  ctx.fillStyle = "#7dffb0"; for (const b of bullets) ctx.fillRect(b.x - 2, b.y - 8, 4, 14);
+  for (const b of abullets) { ctx.fillStyle = "#ff4d6d"; ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, 7); ctx.fill(); }
+  if (state !== "over" && !(P.inv > 0 && Math.floor(time * 14) % 2)) {
+    const hc = HEROES[hero].ship.color; ctx.fillStyle = hc; ctx.beginPath(); ctx.moveTo(P.x - 22, PY + 14); ctx.lineTo(P.x - 8, PY - 2); ctx.lineTo(P.x, PY - 18); ctx.lineTo(P.x + 8, PY - 2); ctx.lineTo(P.x + 22, PY + 14); ctx.fill();
+    ctx.save(); ctx.translate(P.x, PY + 2); ctx.scale(.8, .8); heroTop(ctx, HEROES[hero], { x: 0, y: -1 }, 0, time); ctx.restore();
+  }
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 4, 4); } ctx.globalAlpha = 1;
+  Kit.text(ctx, "Score " + score, 14, 30, 22, "#ffd23f", "left"); Kit.text(ctx, "Niveau " + level + "/" + TOTAL, W / 2, 30, 20); Kit.text(ctx, "♥".repeat(Math.max(0, lives)), W - 14, 30, 24, "#ff5a6e", "right");
+  if (banner > 0 && state === "play") Kit.text(ctx, "Niveau " + level, W / 2, 330, 54);
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "TERRE SAUVÉE !", W / 2, 240, 60, "#ffd23f"); Kit.text(ctx, "10 niveaux terminés ! Score : " + score, W / 2, 305, 26); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "GAME OVER", W / 2, 240, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score + "  •  Niveau " + level, W / 2, 305, 26);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 345, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 405, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "run", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) { if (e.code === "Space" && (state === "title" || ((state === "over" || state === "win") && overT <= 0))) newGame(); },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

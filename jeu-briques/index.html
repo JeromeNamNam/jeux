@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Casse-Briques Magique</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0a1f;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, COLS = 12, BW = 60, BH = 26, BX = 40, BY = 70, PY = 548;
+let hero = heroIndexFromUrl(), state = "title", time = 0, level = 1, score = 0, lives = 3, best = 0, banner = 0, overT = 0;
+let pad, balls = [], bricks = [], drops = [], parts = [];
+try { best = +localStorage.getItem("briques-best") || 0; } catch (e) {}
+const TOTAL = 10, ROWCOL = ["#ff5a6e", "#ff9a3c", "#ffd23f", "#6ee06e", "#4aa3ff", "#b07dff", "#ff7ab8", "#7df0ff"];
+
+function pattern(n, r, c, rows) {   // renvoie 0 (rien), 1 (brique), 2 (dure)
+  const hard = n >= 3 && (r + c) % 4 === 0 ? 2 : 1;
+  switch ((n - 1) % 5) {
+    case 0: return 1;
+    case 1: return (r + c) % 2 ? 0 : hard;
+    case 2: return c >= r && c < COLS - r ? hard : 0;
+    case 3: return c % 3 === 1 ? 0 : hard;
+    default: return (r * 7 + c * 3) % 5 === 0 ? 0 : hard;
+  }
+}
+function buildBricks() {
+  bricks = []; const rows = Math.min(8, 4 + Math.floor(level / 2));
+  for (let r = 0; r < rows; r++) for (let c = 0; c < COLS; c++) { const t = pattern(level, r, c, rows); if (t) bricks.push({ x: BX + c * (BW + 0), y: BY + r * (BH + 2), w: BW - 2, h: BH, hp: t, col: ROWCOL[r % 8], max: t }); }
+}
+function resetBall() { balls = [{ x: pad.x, y: PY - 14, vx: 0, vy: 0, stuck: true, r: 8 }]; }
+function newGame() { level = 1; score = 0; lives = 3; startLevel(); }
+function startLevel() { pad = { x: W / 2, w: 110, wide: 0, slow: 0 }; drops = []; parts = []; buildBricks(); resetBall(); state = "play"; banner = 1.8; }
+const speed = () => (330 + level * 28) * (pad.slow > 0 ? .7 : 1);
+function launch() { const b = balls.find(b => b.stuck); if (!b) return; b.stuck = false; const a = -Math.PI / 2 + (Math.random() - .5) * .6; b.vx = Math.cos(a) * speed(); b.vy = Math.sin(a) * speed(); Music.sfx("bounce"); }
+function burst(x, y, c, n) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.3, s = 40 + Math.random() * 160; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .4 + Math.random() * .4, c }); } }
+function loseLife() {
+  lives--; Music.sfx("hit");
+  if (lives <= 0) { state = "over"; overT = .8; Music.sfx("lose"); if (score > best) { best = score; try { localStorage.setItem("briques-best", best); } catch (e) {} } }
+  else { pad.wide = 0; resetBall(); }
+}
+
+function update(dt) {
+  time += dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt; if (p.life <= 0) parts.splice(i, 1); }
+  if (state === "over") overT -= dt;
+  if (state !== "play" || Kit.paused) return;
+  if (banner > 0) banner -= dt;
+  const k = Kit.keys; pad.w = pad.wide > 0 ? 170 : 110; pad.wide = Math.max(0, pad.wide - dt); pad.slow = Math.max(0, pad.slow - dt);
+  pad.x = Math.max(pad.w / 2, Math.min(W - pad.w / 2, pad.x + ((k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0)) * 560 * dt));
+  for (let bi = balls.length - 1; bi >= 0; bi--) {
+    const b = balls[bi];
+    if (b.stuck) { b.x = pad.x; b.y = PY - 14; continue; }
+    const steps = 3; for (let s = 0; s < steps; s++) {
+      b.x += b.vx * dt / steps; b.y += b.vy * dt / steps;
+      if (b.x < b.r) { b.x = b.r; b.vx = Math.abs(b.vx); Music.sfx("bounce"); } if (b.x > W - b.r) { b.x = W - b.r; b.vx = -Math.abs(b.vx); Music.sfx("bounce"); }
+      if (b.y < b.r + 40) { b.y = b.r + 40; b.vy = Math.abs(b.vy); Music.sfx("bounce"); }
+      if (b.vy > 0 && b.y + b.r >= PY && b.y - b.r <= PY + 14 && Math.abs(b.x - pad.x) <= pad.w / 2 + b.r) {
+        const off = (b.x - pad.x) / (pad.w / 2), a = -Math.PI / 2 + off * 1.05, sp = Math.min(speed() * 1.0, 760);
+        b.vx = Math.cos(a) * sp; b.vy = Math.sin(a) * sp; b.y = PY - b.r; Music.sfx("bounce");
+      }
+      for (const br of bricks) {
+        if (br.hp <= 0) continue;
+        if (b.x + b.r > br.x && b.x - b.r < br.x + br.w && b.y + b.r > br.y && b.y - b.r < br.y + br.h) {
+          const ox = Math.min(b.x + b.r - br.x, br.x + br.w - (b.x - b.r)), oy = Math.min(b.y + b.r - br.y, br.y + br.h - (b.y - b.r));
+          if (ox < oy) b.vx = -b.vx; else b.vy = -b.vy;
+          br.hp--; score += br.hp <= 0 ? 10 * level : 3; Music.sfx("brick"); burst(b.x, b.y, br.col, br.hp <= 0 ? 8 : 3);
+          if (br.hp <= 0 && Math.random() < .16) drops.push({ x: br.x + br.w / 2, y: br.y, k: ["W", "M", "S", "H"][Math.floor(Math.random() * 4)] });
+          break;
+        }
+      }
+    }
+    if (b.y > H + 20) balls.splice(bi, 1);
+  }
+  if (!balls.length) loseLife();
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const d = drops[i]; d.y += 140 * dt;
+    if (d.y > H) { drops.splice(i, 1); continue; }
+    if (d.y > PY - 10 && d.y < PY + 20 && Math.abs(d.x - pad.x) < pad.w / 2 + 12) {
+      drops.splice(i, 1); Music.sfx("power"); score += 20;
+      if (d.k === "W") pad.wide = 12; else if (d.k === "S") pad.slow = 10; else if (d.k === "H") lives = Math.min(6, lives + 1);
+      else { const src = balls.find(b => !b.stuck) || balls[0]; for (let j = -1; j <= 1; j += 2) balls.push({ x: src.x, y: src.y, vx: -src.vx * j * .5 + j * 90, vy: src.stuck ? -speed() : src.vy, stuck: false, r: 8 }); }
+    }
+  }
+  if (bricks.every(b => b.hp <= 0)) {
+    score += 100 * level; Music.sfx("level");
+    if (level >= TOTAL) { state = "win"; Music.sfx("win"); if (score > best) { best = score; try { localStorage.setItem("briques-best", best); } catch (e) {} } }
+    else { level++; startLevel(); }
+  }
+}
+
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#1a1050"); g.addColorStop(1, "#05051a"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#fff"; for (let i = 0; i < 50; i++) { ctx.globalAlpha = .3 + .3 * Math.sin(time * 2 + i); ctx.fillRect((i * 151) % W, (i * 83) % H, 2, 2); } ctx.globalAlpha = 1;
+  if (state === "title") {
+    Kit.text(ctx, "CASSE-BRIQUES MAGIQUE", W / 2, 140, 48, "#ffd23f");
+    Kit.text(ctx, "Détruis toutes les briques avec ta balle !", W / 2, 190, 22);
+    Kit.text(ctx, "← → : bouger la raquette   •   ESPACE : lancer la balle   •   P : pause   •   M : musique", W / 2, 245, 15, "#cfe");
+    Kit.text(ctx, "W raquette géante   •   M balles multiples   •   S balle lente   •   ♥ vie en plus", W / 2, 272, 15, "#ffd23f");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 345, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 410); ctx.scale(2.4, 2.4); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 6), time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 510, 26);
+    if (best) Kit.text(ctx, "Record : " + best, W / 2, 555, 18, "#bde");
+    return;
+  }
+  for (const b of bricks) if (b.hp > 0) {
+    ctx.fillStyle = b.hp > 1 ? "#cfd6e4" : b.col; ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 5); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.3)"; ctx.fillRect(b.x + 3, b.y + 3, b.w - 6, 5);
+    if (b.max > 1) { ctx.strokeStyle = b.col; ctx.lineWidth = 3; ctx.stroke(); }
+  }
+  for (const d of drops) { const col = { W: "#ffd23f", M: "#ff7ab8", S: "#4af0ff", H: "#ff5a7a" }[d.k]; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(d.x, d.y, 13, 0, 7); ctx.fill(); ctx.fillStyle = "#101020"; ctx.font = "bold 15px sans-serif"; ctx.textAlign = "center"; ctx.fillText(d.k === "H" ? "♥" : d.k, d.x, d.y + 5); }
+  const hc = HEROES[hero].ship.color;
+  ctx.fillStyle = hc; ctx.beginPath(); ctx.roundRect(pad.x - pad.w / 2, PY, pad.w, 14, 7); ctx.fill(); ctx.fillStyle = "rgba(255,255,255,.4)"; ctx.fillRect(pad.x - pad.w / 2 + 8, PY + 2, pad.w - 16, 3);
+  ctx.save(); ctx.translate(pad.x, PY - 2); ctx.scale(1.3, 1.3); heroTop(ctx, HEROES[hero], { x: 0, y: -1 }, 0, time); ctx.restore();
+  for (const b of balls) { ctx.fillStyle = "#fff"; ctx.shadowColor = hc; ctx.shadowBlur = 14; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.fill(); ctx.shadowBlur = 0; }
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 4, 4); } ctx.globalAlpha = 1;
+  ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fillRect(0, 0, W, 40);
+  Kit.text(ctx, "Score " + score, 14, 29, 22, "#ffd23f", "left"); Kit.text(ctx, "Niveau " + level + "/" + TOTAL, W / 2, 29, 20);
+  Kit.text(ctx, "♥".repeat(Math.max(0, lives)), W - 14, 29, 24, "#ff5a6e", "right");
+  if (balls.some(b => b.stuck) && state === "play") Kit.text(ctx, "ESPACE pour lancer", W / 2, 400, 24, "#fff");
+  if (banner > 0 && state === "play") Kit.text(ctx, "Niveau " + level, W / 2, 330, 54);
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "GAME OVER", W / 2, 250, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score + "  •  Niveau " + level, W / 2, 310, 24);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 350, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 410, 22, "#bde"); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "BRAVO !", W / 2, 250, 64, "#ffd23f"); Kit.text(ctx, "Tu as détruit toutes les briques ! Score : " + score, W / 2, 310, 24); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "brick", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (e.code !== "Space") return;
+    if (state === "title" || state === "win" || (state === "over" && overT <= 0)) newGame(); else if (state === "play" && !Kit.paused) launch();
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

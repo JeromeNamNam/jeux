@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vol Plané</title>
+<style>
+  html,body{margin:0;height:100%;background:#0a1a2a;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, GROUND = 540;
+let hero = heroIndexFromUrl(), state = "title", time = 0, score = 0, lives = 3, best = 0, overT = 0, coins = 0;
+let P, pillars = [], items = [], parts = [], scroll = 0, spawnT = 0, clouds;
+try { best = +localStorage.getItem("vol-best") || 0; } catch (e) {}
+clouds = Array.from({ length: 7 }, (_, i) => ({ x: i * 140, y: 40 + (i * 67) % 260, s: .6 + (i % 3) * .3 }));
+
+function newGame() { P = { x: 230, y: 280, vy: 0, inv: 0 }; pillars = []; items = []; parts = []; score = 0; lives = 3; coins = 0; scroll = 0; spawnT = 0; state = "ready"; }
+const gapSize = () => Math.max(150, 215 - score * 3), spd = () => Math.min(300, 190 + score * 4);
+function spawnPillar() {
+  const gap = gapSize(), top = 70 + Math.random() * (GROUND - gap - 140);
+  pillars.push({ x: W + 40, w: 70, top, gap, passed: false });
+  if (Math.random() < .8) items.push({ x: W + 75, y: top + gap / 2 + (Math.random() - .5) * (gap - 70), got: false });
+}
+function flap() { P.vy = -400; Music.sfx("flap"); for (let i = 0; i < 5; i++) parts.push({ x: P.x - 14, y: P.y + 18, vx: -40 - Math.random() * 60, vy: 40 + Math.random() * 80, life: .4, c: "#ffd890" }); }
+function hurt() {
+  if (P.inv > 0) return; lives--; Music.sfx("hit");
+  if (lives <= 0) { state = "over"; overT = .8; Music.sfx("lose"); if (score > best) { best = score; try { localStorage.setItem("vol-best", best); } catch (e) {} } return; }
+  P.inv = 2; P.y = 280; P.vy = 0; pillars = pillars.filter(p => p.x > P.x + 220 || p.x + p.w < P.x - 40);
+}
+
+function update(dt) {
+  time += dt;
+  for (const c of clouds) { c.x -= 12 * c.s * dt * 3; if (c.x < -120) c.x = W + 60; }
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  if (state === "over" || state === "win") overT -= dt;
+  if (state === "ready") { P.y = 280 + Math.sin(time * 4) * 10; return; }
+  if (state !== "play" || Kit.paused) return;
+  const k = Kit.keys; P.vy += (k.ArrowDown ? 1500 : 1000) * dt; P.vy = Math.min(P.vy, 600); P.y += P.vy * dt; if (P.inv > 0) P.inv -= dt;
+  if (score >= 80) { state = "win"; overT = .8; Music.sfx("win"); if (score > best) { best = score; try { localStorage.setItem("vol-best", best); } catch (e) {} } return; }
+  scroll += spd() * dt; spawnT -= dt; if (spawnT <= 0) { spawnPillar(); spawnT = 1.7 - Math.min(.5, score * .02); }
+  for (const p of pillars) {
+    p.x -= spd() * dt;
+    if (P.x + 14 > p.x && P.x - 14 < p.x + p.w && (P.y - 18 < p.top || P.y + 20 > p.top + p.gap)) hurt();
+    if (!p.passed && p.x + p.w < P.x - 14) { p.passed = true; score++; Music.sfx("pop"); }
+  }
+  pillars = pillars.filter(p => p.x > -100);
+  for (const it of items) { it.x -= spd() * dt; if (!it.got && Math.hypot(it.x - P.x, it.y - P.y) < 28) { it.got = true; coins++; score++; Music.sfx("coin"); } }
+  items = items.filter(i => i.x > -40 && !i.got);
+  if (P.y > GROUND - 20) { P.y = GROUND - 20; hurt(); P.vy = -300; }
+  if (P.y < 20) { P.y = 20; P.vy = 0; }
+}
+
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#4aa3ff"); g.addColorStop(1, "#bfe6ff"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "rgba(255,255,255,.85)";
+  for (const c of clouds) { ctx.beginPath(); ctx.ellipse(c.x, c.y, 50 * c.s, 16 * c.s, 0, 0, 7); ctx.ellipse(c.x + 28 * c.s, c.y - 10 * c.s, 32 * c.s, 15 * c.s, 0, 0, 7); ctx.fill(); }
+  ctx.fillStyle = "#7fcf8a"; for (let i = -1; i < 12; i++) { const x = i * 90 - (scroll * .3) % 90; ctx.beginPath(); ctx.arc(x + 45, GROUND, 70, Math.PI, 0); ctx.fill(); }
+  for (const p of pillars) {
+    const grad = ctx.createLinearGradient(p.x, 0, p.x + p.w, 0); grad.addColorStop(0, "#d8782e"); grad.addColorStop(.5, "#f0a050"); grad.addColorStop(1, "#b85a1e");
+    ctx.fillStyle = grad; ctx.fillRect(p.x, 0, p.w, p.top); ctx.fillRect(p.x, p.top + p.gap, p.w, GROUND - p.top - p.gap);
+    ctx.fillStyle = "#8a3a10"; ctx.fillRect(p.x - 6, p.top - 22, p.w + 12, 22); ctx.fillRect(p.x - 6, p.top + p.gap, p.w + 12, 22);
+  }
+  ctx.fillStyle = "#6ea838"; ctx.fillRect(0, GROUND, W, 14); ctx.fillStyle = "#7a4e2d"; ctx.fillRect(0, GROUND + 14, W, H);
+  for (const it of items) { const w = Math.abs(Math.cos(time * 5 + it.x * .05)) * 8 + 2; ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.ellipse(it.x, it.y, w, 10, 0, 0, 7); ctx.fill(); ctx.strokeStyle = "#c98a00"; ctx.lineWidth = 2; ctx.stroke(); }
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2.5); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 5, 5); } ctx.globalAlpha = 1;
+  if (state !== "title" && !(P.inv > 0 && Math.floor(time * 14) % 2)) {
+    ctx.save(); ctx.translate(P.x, P.y); ctx.rotate(Math.max(-.5, Math.min(.7, P.vy / 700)));
+    const fl = 8 + Math.random() * 8; ctx.fillStyle = "#ffb23a"; ctx.beginPath(); ctx.moveTo(-18, 6); ctx.lineTo(-18 - fl, 12); ctx.lineTo(-18, 18); ctx.fill();
+    ctx.fillStyle = "#777"; ctx.fillRect(-20, 2, 8, 20);
+    ctx.scale(1.2, 1.2); ctx.translate(0, -16); heroSide(ctx, HEROES[hero], 3 * Math.sin(time * 14), false, time); ctx.restore();
+  }
+  if (state === "title") {
+    ctx.fillStyle = "rgba(10,30,60,.55)"; ctx.fillRect(0, 0, W, H);
+    Kit.text(ctx, "VOL PLANÉ", W / 2, 130, 56, "#ffd23f");
+    Kit.text(ctx, "Vole entre les tours sans les toucher !", W / 2, 180, 22);
+    Kit.text(ctx, "ESPACE ou ↑ : battre des ailes   •   ↓ : plonger   •   P : pause   •   M : musique", W / 2, 230, 15, "#cfe");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 310, 22, "#ffd23f");
+    ctx.save(); ctx.translate(W / 2, 360); ctx.scale(2.2, 2.2); heroSide(ctx, HEROES[hero], Math.sin(time * 8) * 4, true, time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour décoller", W / 2, 500, 26);
+    if (best) Kit.text(ctx, "Record : " + best, W / 2, 545, 18, "#fff");
+    return;
+  }
+  Kit.text(ctx, String(score), W / 2, 70, 64, "#fff"); Kit.text(ctx, "Niveau " + Math.min(10, 1 + Math.floor(score / 8)) + "/10", W / 2, 100, 20, "#ffd23f");
+  Kit.text(ctx, "♥".repeat(Math.max(0, lives)), W - 14, 34, 26, "#ff5a6e", "right"); Kit.text(ctx, "Record " + Math.max(best, score), 14, 34, 18, "#fff", "left");
+  if (state === "ready") Kit.text(ctx, "ESPACE pour battre des ailes !", W / 2, 440, 26);
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "BRAVO !", W / 2, 240, 64, "#ffd23f"); Kit.text(ctx, "10 niveaux terminés ! Score : " + score, W / 2, 300, 26); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "GAME OVER", W / 2, 240, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score, W / 2, 300, 28);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 340, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "fly", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    const jump = e.code === "Space" || e.code === "ArrowUp";
+    if (state === "title") { if (e.code === "Space") newGame(); }
+    else if (state === "ready") { if (jump) { state = "play"; flap(); } }
+    else if (state === "play") { if (jump && !Kit.paused) flap(); }
+    else if ((state === "over" || state === "win") && e.code === "Space" && overT <= 0) newGame();
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

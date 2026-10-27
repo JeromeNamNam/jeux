@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2048 Animaux</title>
+<style>
+  html,body{margin:0;height:100%;background:#1a1330;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, N = 4, CELL = 108, GAP = 10, BX = 50, BY = 90;
+const ANIMALS = ["", "🐛", "🐜", "🐞", "🐝", "🐸", "🐱", "🦊", "🐼", "🦁", "🐲", "🦄", "🌟"];
+let hero = heroIndexFromUrl(), state = "title", time = 0, score = 0, best = 0, grid, pop, prev = null, won = false, msg = "", msgT = 0, overT = 0;
+try { best = +localStorage.getItem("2048-best") || 0; } catch (e) {}
+
+function empty() { const e = []; grid.forEach((v, i) => { if (!v) e.push(i); }); return e; }
+function spawn() { const e = empty(); if (!e.length) return; const i = e[Math.floor(Math.random() * e.length)]; grid[i] = Math.random() < .9 ? 1 : 2; pop[i] = 1; }
+function newGame() { grid = new Array(N * N).fill(0); pop = new Array(N * N).fill(0); score = 0; won = false; prev = null; state = "play"; spawn(); spawn(); }
+function lineIdx(dir, k) {   // indices d'une ligne, du côté "où ça glisse" vers l'autre
+  const a = []; for (let j = 0; j < N; j++) {
+    if (dir === "left") a.push(k * N + j); else if (dir === "right") a.push(k * N + (N - 1 - j));
+    else if (dir === "up") a.push(j * N + k); else a.push((N - 1 - j) * N + k);
+  } return a;
+}
+function move(dir) {
+  const before = grid.slice(), sb = score; let moved = false;
+  for (let k = 0; k < N; k++) {
+    const idx = lineIdx(dir, k), vals = idx.map(i => grid[i]).filter(v => v), out = [];
+    for (let j = 0; j < vals.length; j++) {
+      if (vals[j] === vals[j + 1]) { out.push(vals[j] + 1); score += 2 ** (vals[j] + 1); j++; if (out[out.length - 1] === 11 && !won) { won = true; msg = "🦄 Licorne ! Tu as gagné ! Continue pour la 🌟"; msgT = 4; Music.sfx("win"); } out.pushed = true; pop[idx[out.length - 1]] = 1; }
+      else out.push(vals[j]);
+    }
+    while (out.length < N) out.push(0);
+    idx.forEach((gi, j) => { if (grid[gi] !== out[j]) moved = true; grid[gi] = out[j]; });
+  }
+  if (!moved) return false;
+  prev = { grid: before, score: sb }; Music.sfx(score > sb ? "match" : "flip"); spawn();
+  if (score > best) { best = score; try { localStorage.setItem("2048-best", best); } catch (e) {} }
+  if (!empty().length && !canMove()) { state = "over"; overT = .8; Music.sfx("lose"); }
+  return true;
+}
+function canMove() { for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) { const v = grid[r * N + c]; if ((c < N - 1 && grid[r * N + c + 1] === v) || (r < N - 1 && grid[(r + 1) * N + c] === v)) return true; } return false; }
+function undo() { if (!prev || state !== "play") return; grid = prev.grid; score = prev.score; prev = null; pop.fill(0); }
+
+function update(dt) { time += dt; msgT -= dt; overT -= dt; if (pop) for (let i = 0; i < pop.length; i++) pop[i] = Math.max(0, pop[i] - dt * 4); }
+
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, "#2a1458"); g.addColorStop(1, "#0f3a5a"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  if (state === "title") {
+    Kit.text(ctx, "2048 ANIMAUX", W / 2, 130, 56, "#ffd23f");
+    Kit.text(ctx, "Fais glisser les animaux : deux pareils fusionnent en un plus grand !", W / 2, 185, 20);
+    Kit.text(ctx, "🐛 → 🐜 → 🐞 → 🐝 → 🐸 → 🐱 → 🦊 → 🐼 → 🦁 → 🐲 → 🦄", W / 2, 235, 26);
+    Kit.text(ctx, "← ↑ ↓ → : glisser   •   Z : annuler   •   M : musique   •   Échap : menu", W / 2, 285, 15, "#cfe");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 350, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 420); ctx.scale(2.6, 2.6); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 6), time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 520, 26);
+    if (best) Kit.text(ctx, "Record : " + best, W / 2, 560, 18, "#bde");
+    return;
+  }
+  const hc = HEROES[hero].ship.color, bs = N * CELL + (N + 1) * GAP;
+  ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.beginPath(); ctx.roundRect(BX, BY, bs, bs, 16); ctx.fill();
+  for (let i = 0; i < N * N; i++) { const x = BX + GAP + (i % N) * (CELL + GAP), y = BY + GAP + Math.floor(i / N) * (CELL + GAP); ctx.fillStyle = "rgba(255,255,255,.1)"; ctx.beginPath(); ctx.roundRect(x, y, CELL, CELL, 12); ctx.fill(); }
+  for (let i = 0; i < N * N; i++) {
+    const v = grid[i]; if (!v) continue;
+    const cx = BX + GAP + (i % N) * (CELL + GAP) + CELL / 2, cy = BY + GAP + Math.floor(i / N) * (CELL + GAP) + CELL / 2, s = 1 - .35 * pop[i] * pop[i] + (pop[i] > .5 ? 0 : 0);
+    ctx.save(); ctx.translate(cx, cy); ctx.scale(s, s);
+    ctx.fillStyle = "hsl(" + ((v * 32 + 190) % 360) + ",70%," + (v > 9 ? 50 : 62) + "%)"; ctx.beginPath(); ctx.roundRect(-CELL / 2, -CELL / 2, CELL, CELL, 12); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.25)"; ctx.fillRect(-CELL / 2 + 8, -CELL / 2 + 6, CELL - 16, 6);
+    ctx.font = "54px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(ANIMALS[Math.min(v, 12)], 0, -6);
+    ctx.textBaseline = "alphabetic"; ctx.fillStyle = "#fff"; ctx.font = "bold 18px sans-serif"; ctx.fillText(2 ** v, 0, 40);
+    ctx.restore();
+  }
+  const sx = 640;
+  Kit.text(ctx, "SCORE", sx, 130, 16, "#bde"); Kit.text(ctx, String(score), sx, 165, 36, "#ffd23f");
+  Kit.text(ctx, "RECORD", sx, 215, 16, "#bde"); Kit.text(ctx, String(Math.max(best, score)), sx, 250, 30, "#fff");
+  ctx.save(); ctx.translate(sx, 350); ctx.scale(3.2, 3.2); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 5) * 1.5, time); ctx.restore();
+  Kit.text(ctx, HEROES[hero].name, sx, 425, 14, hc);
+  Kit.text(ctx, "Z : annuler", sx, 480, 15, "#cfe"); Kit.text(ctx, "Échap : menu", sx, 505, 15, "#cfe");
+  Kit.text(ctx, "Niveau " + Math.min(10, Math.max(1, Math.max(...grid) - 1)) + "/10  •  🦄", sx, 540, 16, "#ffd23f");
+  if (msgT > 0) Kit.text(ctx, msg, W / 2, 60, 22, "#fff");
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PLUS DE PLACE !", W / 2, 250, 56, "#ff5a6e"); Kit.text(ctx, "Score : " + score, W / 2, 310, 28);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 350, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 410, 22, "#bde"); }
+}
+
+const DIRS = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+Kit.install({
+  canvas: cv, song: "calm", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => false,
+  keydown(e) {
+    if (state === "title" || (state === "over" && overT <= 0)) { if (e.code === "Space") newGame(); return; }
+    if (state === "play") { if (DIRS[e.code]) move(DIRS[e.code]); else if (e.code === "KeyZ") undo(); }
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>

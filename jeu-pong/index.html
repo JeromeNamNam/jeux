@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pong Turbo</title>
+<style>
+  html,body{margin:0;height:100%;background:#0a0f1e;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*4/3));aspect-ratio:4/3;box-shadow:0 0 40px #000;border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script src="../heroes.js"></script>
+<script src="../kit.js"></script>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 800, H = 600, PH = 100, PW = 14, WIN = 7, TOTAL = 10;
+let hero = heroIndexFromUrl(), state = "title", time = 0, level = 1, score = 0, best = 0, pl = 0, ai = 0, overT = 0, banner = 0;
+let me = { y: H / 2 }, cpu = { y: H / 2, face: 0 }, ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, stuck: true, dir: 1, fire: false }, smash = 0, smashCd = 0, trail = [], parts = [];
+try { best = +localStorage.getItem("pong-best") || 0; } catch (e) {}
+
+function newGame() { level = 1; score = 0; startMatch(); }
+function startMatch() { pl = ai = 0; cpu.face = (hero + level * 3 + 5) % HEROES.length; state = "play"; banner = 1.6; serve(1); }
+function serve(dir) { ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, stuck: true, dir, fire: false }; trail = []; }
+function launch() { const a = (Math.random() - .5) * .7; ball.vx = Math.cos(a) * 380 * ball.dir; ball.vy = Math.sin(a) * 380; ball.stuck = false; Music.sfx("bounce"); }
+function boom(x, y, c, n) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.3, s = 50 + Math.random() * 180; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .5, c }); } }
+function hitPaddle(py, side) {
+  const off = (ball.y - py) / (PH / 2), a = off * 1.0, sp = Math.min(900, Math.hypot(ball.vx, ball.vy) * 1.06 + 8);
+  let s2 = sp; if (side === 0 && smash > 0) { s2 = Math.min(1000, sp * 1.4); ball.fire = true; smash = 0; Music.sfx("power"); } else ball.fire = false;
+  ball.vx = Math.cos(a) * s2 * (side === 0 ? 1 : -1); ball.vy = Math.sin(a) * s2; Music.sfx("bounce"); boom(ball.x, ball.y, ball.fire ? "#ff9a3c" : "#fff", 8);
+}
+function point(who) {
+  if (who === "me") { pl++; Music.sfx("coin"); score += 10 * level; } else { ai++; Music.sfx("hit"); }
+  boom(ball.x, ball.y, "#ffd23f", 20);
+  if (pl >= WIN) { score += 100 * level; if (level >= TOTAL) { state = "win"; Music.sfx("win"); save(); } else { level++; Music.sfx("level"); startMatch(); } }
+  else if (ai >= WIN) { state = "over"; overT = .8; Music.sfx("lose"); save(); }
+  else serve(who === "me" ? -1 : 1);
+}
+function save() { if (score > best) { best = score; try { localStorage.setItem("pong-best", best); } catch (e) {} } }
+
+function update(dt) {
+  time += dt; overT -= dt; banner -= dt;
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  if (state !== "play" || Kit.paused) return;
+  const k = Kit.keys; me.y = Math.max(PH / 2, Math.min(H - PH / 2, me.y + ((k.ArrowDown ? 1 : 0) - (k.ArrowUp ? 1 : 0)) * 520 * dt));
+  smash = Math.max(0, smash - dt); smashCd = Math.max(0, smashCd - dt);
+  const asp = Math.min(520, 190 + level * 38);
+  const target = ball.stuck || ball.vx < 0 ? H / 2 : ball.y + Math.sin(time * 2.3) * (60 - level * 8);
+  cpu.y += Math.max(-asp * dt, Math.min(asp * dt, target - cpu.y)); cpu.y = Math.max(PH / 2, Math.min(H - PH / 2, cpu.y));
+  if (ball.stuck) { ball.y = H / 2 + Math.sin(time * 3) * 20; return; }
+  trail.push({ x: ball.x, y: ball.y }); if (trail.length > 10) trail.shift();
+  for (let s = 0; s < 3; s++) {
+    ball.x += ball.vx * dt / 3; ball.y += ball.vy * dt / 3;
+    if (ball.y < 10) { ball.y = 10; ball.vy = Math.abs(ball.vy); Music.sfx("bounce"); } if (ball.y > H - 10) { ball.y = H - 10; ball.vy = -Math.abs(ball.vy); Music.sfx("bounce"); }
+    if (ball.vx < 0 && ball.x - 9 < 40 + PW && ball.x > 30 && Math.abs(ball.y - me.y) < PH / 2 + 8) { ball.x = 40 + PW + 9; hitPaddle(me.y, 0); }
+    if (ball.vx > 0 && ball.x + 9 > W - 40 - PW && ball.x < W - 30 && Math.abs(ball.y - cpu.y) < PH / 2 + 8) { ball.x = W - 40 - PW - 9; hitPaddle(cpu.y, 1); }
+  }
+  if (ball.x < -20) point("cpu"); else if (ball.x > W + 20) point("me");
+}
+
+function draw() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#101a3c"); g.addColorStop(1, "#06081a"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = "rgba(255,255,255,.2)"; ctx.setLineDash([14, 14]); ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke(); ctx.setLineDash([]);
+  if (state === "title") {
+    Kit.text(ctx, "PONG TURBO", W / 2, 130, 56, "#ffd23f");
+    Kit.text(ctx, "Renvoie la balle ! Le premier à " + WIN + " points gagne.", W / 2, 180, 22);
+    Kit.text(ctx, "↑ ↓ : bouger   •   ESPACE : tir smash (balle de feu !)   •   P : pause   •   M : musique", W / 2, 230, 15, "#cfe");
+    Kit.text(ctx, "10 adversaires de plus en plus forts.", W / 2, 256, 15, "#cfe");
+    Kit.text(ctx, "◀  " + HEROES[hero].name + "  ▶   (flèches, Tab ou clic)", W / 2, 330, 22, HEROES[hero].ship.color);
+    ctx.save(); ctx.translate(W / 2, 400); ctx.scale(2.6, 2.6); heroTop(ctx, HEROES[hero], { x: 0, y: 1 }, Math.sin(time * 6), time); ctx.restore();
+    Kit.text(ctx, "Appuie sur ESPACE pour jouer", W / 2, 510, 26); if (best) Kit.text(ctx, "Record : " + best, W / 2, 553, 18, "#bde");
+    return;
+  }
+  const hc = HEROES[hero].ship.color, cc = HEROES[cpu.face].ship.color;
+  ctx.fillStyle = hc; ctx.beginPath(); ctx.roundRect(40, me.y - PH / 2, PW, PH, 7); ctx.fill();
+  ctx.fillStyle = cc; ctx.beginPath(); ctx.roundRect(W - 40 - PW, cpu.y - PH / 2, PW, PH, 7); ctx.fill();
+  ctx.save(); ctx.translate(18, me.y); ctx.scale(1.1, 1.1); heroTop(ctx, HEROES[hero], { x: 1, y: 0 }, 0, time); ctx.restore();
+  ctx.save(); ctx.translate(W - 18, cpu.y); ctx.scale(1.1, 1.1); heroTop(ctx, HEROES[cpu.face], { x: -1, y: 0 }, 0, time); ctx.restore();
+  trail.forEach((t, i) => { ctx.globalAlpha = i / 14; ctx.fillStyle = ball.fire ? "#ff9a3c" : "#fff"; ctx.beginPath(); ctx.arc(t.x, t.y, 4 + i * .5, 0, 7); ctx.fill(); }); ctx.globalAlpha = 1;
+  ctx.fillStyle = ball.fire ? "#ffcf6a" : "#fff"; ctx.shadowColor = ball.fire ? "#ff5a1a" : hc; ctx.shadowBlur = 18; ctx.beginPath(); ctx.arc(ball.x, ball.y, 9, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+  for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x, p.y, 4, 4); } ctx.globalAlpha = 1;
+  Kit.text(ctx, String(pl), W / 2 - 60, 80, 56, hc); Kit.text(ctx, String(ai), W / 2 + 60, 80, 56, cc);
+  Kit.text(ctx, "Score " + score, 14, H - 14, 18, "#ffd23f", "left"); Kit.text(ctx, "Match " + level + "/" + TOTAL + " contre " + HEROES[cpu.face].name, W - 14, H - 14, 16, "#fff", "right");
+  if (smashCd <= 0) Kit.text(ctx, "ESPACE = smash prêt !", W / 2, H - 14, 15, "#ffd23f");
+  if (ball.stuck && state === "play") Kit.text(ctx, "ESPACE pour servir", W / 2, 420, 26);
+  if (Kit.paused) { ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PAUSE", W / 2, H / 2, 60); }
+  if (state === "over") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "PERDU !", W / 2, 250, 64, "#ff5a6e"); Kit.text(ctx, "Score : " + score + "  •  Match " + level, W / 2, 310, 26);
+    if (score >= best && score > 0) Kit.text(ctx, "Nouveau record !", W / 2, 350, 24, "#ffd23f"); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 410, 22, "#bde"); }
+  if (state === "win") { ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(0, 0, W, H); Kit.text(ctx, "CHAMPION !", W / 2, 250, 64, "#ffd23f"); Kit.text(ctx, "Tu as battu tout le monde ! Score : " + score, W / 2, 310, 24); Kit.text(ctx, "ESPACE pour rejouer", W / 2, 400, 22, "#bde"); }
+}
+
+Kit.install({
+  canvas: cv, song: "run", getHero: () => hero, setHero: i => { hero = i; }, isTitle: () => state === "title", canPause: () => state === "play",
+  keydown(e) {
+    if (e.code !== "Space") return;
+    if (state === "title" || state === "win" || (state === "over" && overT <= 0)) newGame();
+    else if (state === "play" && !Kit.paused) { if (ball.stuck) launch(); else if (smashCd <= 0) { smash = .45; smashCd = 2.5; } }
+  },
+});
+Kit.loop(update, draw);
+</script>
+<script src="../dock.js"></script>
+</body>
+</html>
